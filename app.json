@@ -1,0 +1,184 @@
+{
+  "expo": {
+    "name": "Bikera Ride",
+    "slug": "bikera-ride",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "bikeraride",
+    "newArchEnabled": true,
+    "primaryColor": "#42C0FB",
+    "backgroundColor": "#000000",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000",
+      "dark": {
+        "image": "./assets/icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      }
+    },
+    "notification": {
+      "icon": "./assets/icon.png",
+      "color": "#42C0FB"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.bikera.app",
+      "buildNumber": "1",
+      "icon": "./assets/icon.png",
+      "splash": {
+        "image": "./assets/icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera for profile pictures and ride validation.",
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to track bike rides and validate routes.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app uses your location to track bike rides and validate routes, even when the app is in the background.",
+        "NSMotionUsageDescription": "This app uses motion sensors to detect and track bike rides.",
+        "NSPhotoLibraryUsageDescription": "This app uses photo library to select profile pictures.",
+        "NSPhotoLibraryAddUsageDescription": "This app needs permission to save photos to your photo library.",
+        "NSUserTrackingUsageDescription": "This app uses tracking to provide personalized ride tracking and social features.",
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "remote-notification"
+        ]
+      },
+      "usesIcloudStorage": false,
+      "usesAppleSignIn": false,
+      "associatedDomains": [
+        "applinks:bikera.app"
+      ]
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#000000",
+        "monochromeImage": "./assets/icon.png"
+      },
+      "package": "com.bikera.app",
+      "versionCode": 3,
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "icon": "./assets/icon.png",
+      "splash": {
+        "image": "./assets/icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": {
+            "scheme": "bikeraride",
+            "host": "auth",
+            "pathPrefix": "/callback"
+          },
+          "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "bikera.app",
+              "pathPrefix": "/"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ],
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "name": "Bikera Ride",
+      "shortName": "Bikera Ride",
+      "lang": "en",
+      "scope": "/",
+      "themeColor": "#42C0FB",
+      "description": "Bikera Ride - Track bike rides, chat with friends, and join ride pools",
+      "orientation": "portrait",
+      "backgroundColor": "#000000",
+      "display": "standalone",
+      "startUrl": "/",
+      "splash": {
+        "image": "./assets/icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": false,
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "minSdkVersion": 24,
+            "buildToolsVersion": "36.0.0"
+          },
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "This app uses your location to track bike rides and validate routes, even when the app is in the background.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "locationAlwaysPermission": "This app needs background location access to track your bike rides continuously.",
+          "locationWhenInUsePermission": "This app uses your location to track bike rides and validate routes."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "This app uses the camera for profile pictures and ride validation."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#42C0FB"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "37c6e2d9-673d-46a6-b119-8f451f716b2e"
+      }
+    },
+    "owner": "bikera"
+  }
+}

@@ -1,0 +1,335 @@
+type Timestamp = int;
+type TeamScore = 
+ record {
+   participantCount: nat;
+   participants: vec ParticipantScore;
+   team: Team;
+   totalDistance: nat;
+   totalScore: nat;
+ };
+type TeamProgress = 
+ record {
+   completedAt: opt Timestamp;
+   currentValue: nat;
+   isCompleted: bool;
+   percentageComplete: nat;
+   targetValue: nat;
+   team: Team;
+ };
+type Team = 
+ variant {
+   TeamA;
+   TeamB;
+ };
+type SubmitRideRequest = 
+ record {
+   poolId: PoolId;
+   sessionId: RideSessionId;
+ };
+type RideSubmission = 
+ record {
+   avgSpeed: nat;
+   distance: nat;
+   duration: nat;
+   maxSpeed: nat;
+   sessionId: RideSessionId;
+   submittedAt: Timestamp;
+ };
+type RideSessionId = text;
+type RewardModel = 
+ variant {
+   Proportional;
+   TopThree;
+   WinnerTakesAll;
+ };
+type Result_9 = 
+ variant {
+   err: text;
+   ok: vec ParticipantScore;
+ };
+type Result_8 = 
+ variant {
+   err: text;
+   ok: record {
+         hasMore: bool;
+         leaderboard: vec ParticipantScore;
+         total: nat;
+       };
+ };
+type Result_7 = 
+ variant {
+   err: text;
+   ok: vec Participant;
+ };
+type Result_6 = 
+ variant {
+   err: text;
+   ok: record {
+         hasMore: bool;
+         participants: vec Participant;
+         total: nat;
+       };
+ };
+type Result_5 = 
+ variant {
+   err: text;
+   ok: DepositAccount;
+ };
+type Result_4 = 
+ variant {
+   err: text;
+   ok: record {
+         teamA: TeamScore;
+         teamB: TeamScore;
+       };
+ };
+type Result_3 = 
+ variant {
+   err: text;
+   ok: record {
+         teamA: TeamProgress;
+         teamB: TeamProgress;
+       };
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok: bool;
+ };
+type Result_13 = 
+ variant {
+   err: text;
+   ok: nat;
+ };
+type Result_12 = 
+ variant {
+   err: text;
+   ok: Pool;
+ };
+type Result_11 = 
+ variant {
+   err: text;
+   ok: CreatePoolResponse;
+ };
+type Result_10 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      activePools: nat;
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      totalPools: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: JoinPoolResponse;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: RideSubmission;
+ };
+type PoolVisibility = 
+ variant {
+   Private;
+   Public;
+ };
+type PoolType = 
+ variant {
+   CheckpointRally;
+   Consistency;
+   Custom;
+   DistanceKing;
+   EcoMode;
+   SpeedEfficiency;
+   TeamRelay;
+ };
+type PoolSummary = 
+ record {
+   createdAt: Timestamp;
+   description: text;
+   endTime: Timestamp;
+   entryFee: nat;
+   id: PoolId;
+   maxParticipants: nat;
+   networkFee: nat;
+   owner: principal;
+   participantCount: nat;
+   poolType: PoolType;
+   potAmount: nat;
+   rewardModel: RewardModel;
+   startTime: Timestamp;
+   status: PoolStatus;
+   title: text;
+   visibility: PoolVisibility;
+ };
+type PoolStatus = 
+ variant {
+   Active;
+   Cancelled;
+   Closed;
+   Draft;
+ };
+type PoolResult = 
+ record {
+   finalizedAt: Timestamp;
+   leaderboard: vec ParticipantScore;
+   payouts: vec record {
+                  principal;
+                  nat;
+                };
+   totalPot: nat;
+ };
+type PoolObjective = 
+ record {
+   description: opt text;
+   objectiveType: ObjectiveType;
+   targetValue: nat;
+ };
+type PoolId = text;
+type Pool = 
+ record {
+   createdAt: Timestamp;
+   description: text;
+   endTime: Timestamp;
+   entryFee: nat;
+   id: PoolId;
+   inviteCode: opt text;
+   maxParticipants: nat;
+   networkFee: nat;
+   objective: opt PoolObjective;
+   owner: principal;
+   participantCount: nat;
+   poolType: PoolType;
+   potAmount: nat;
+   rewardModel: RewardModel;
+   seedAmount: nat;
+   startTime: Timestamp;
+   status: PoolStatus;
+   title: text;
+   updatedAt: Timestamp;
+   visibility: PoolVisibility;
+ };
+type ParticipantScore = 
+ record {
+   bestAvgSpeed: nat;
+   bestMaxSpeed: nat;
+   score: nat;
+   submissions: vec RideSubmission;
+   team: opt Team;
+   totalDistance: nat;
+   userId: principal;
+ };
+type Participant = 
+ record {
+   hasPaidEntry: bool;
+   joinedAt: Timestamp;
+   rideSubmissions: vec RideSubmission;
+   team: opt Team;
+   userId: principal;
+ };
+type ObjectiveType = 
+ variant {
+   AverageSpeed: nat;
+   Custom: text;
+   TotalDistance: nat;
+   TotalRides: nat;
+   TotalTime: nat;
+ };
+type ListPoolsResponse = 
+ record {
+   hasMore: bool;
+   pools: vec PoolSummary;
+   total: nat;
+ };
+type ListPoolsRequest = 
+ record {
+   limit: nat;
+   offset: nat;
+   onlyPublic: bool;
+   poolType: opt PoolType;
+   sortBy:
+    opt variant {
+          CreatedAt;
+          EndTime;
+          ParticipantCount;
+          PotAmount;
+          StartTime;
+        };
+   sortOrder: opt variant {
+                    Asc;
+                    Desc;
+                  };
+   status: opt PoolStatus;
+ };
+type JoinPoolResponse = 
+ record {
+   participant: Participant;
+   pool: Pool;
+ };
+type JoinPoolRequest = 
+ record {
+   inviteCode: opt text;
+   poolId: PoolId;
+   team: opt Team;
+ };
+type DepositAccount = 
+ record {
+   owner: principal;
+   subaccount: vec nat8;
+ };
+type CreatePoolResponse = record {pool: Pool;};
+type CreatePoolRequest = 
+ record {
+   description: text;
+   endTime: Timestamp;
+   entryFee: nat;
+   inviteCode: opt text;
+   maxParticipants: nat;
+   networkFee: nat;
+   objective: opt PoolObjective;
+   poolType: PoolType;
+   rewardModel: RewardModel;
+   seedAmount: nat;
+   startTime: Timestamp;
+   title: text;
+   visibility: PoolVisibility;
+ };
+service : {
+  activatePool: (PoolId) -> (Result_12);
+  autoCloseExpiredPools: () -> (nat);
+  cancelPool: (PoolId, opt text) -> (Result_12);
+  claimReward: (PoolId) -> (Result_13);
+  closePool: (PoolId) -> (Result_12);
+  createPool: (CreatePoolRequest) -> (Result_11);
+  getActivePools: (nat, nat) -> (vec PoolSummary) query;
+  getAllPools: (nat, nat) -> (vec PoolSummary) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_10);
+  getClosedPools: (nat, nat) -> (vec PoolSummary) query;
+  getLeaderboard: (PoolId) -> (Result_9) query;
+  getLeaderboardPaginated: (PoolId, nat, nat) -> (Result_8) query;
+  getParticipants: (PoolId) -> (Result_7) query;
+  getParticipantsPaginated: (PoolId, nat, nat) -> (Result_6) query;
+  getPool: (PoolId) -> (opt Pool) query;
+  getPoolDepositAccount: (PoolId) -> (Result_5) query;
+  getPoolObjective: (PoolId) -> (opt PoolObjective) query;
+  getPoolResult: (PoolId) -> (opt PoolResult) query;
+  getTeamLeaderboard: (PoolId) -> (Result_4) query;
+  getTeamProgress: (PoolId) -> (Result_3) query;
+  getTotalNetworkFees: () -> (nat) query;
+  hasClaimedReward: (PoolId, principal) -> (bool) query;
+  hasTeamCompletedObjective: (PoolId, Team) -> (Result_2) query;
+  isParticipant: (PoolId, principal) -> (bool) query;
+  joinPool: (JoinPoolRequest) -> (Result_1);
+  listPools: (bool) -> (vec PoolSummary) query;
+  listPoolsPaginated: (ListPoolsRequest) -> (ListPoolsResponse) query;
+  submitRide: (SubmitRideRequest) -> (Result);
+}

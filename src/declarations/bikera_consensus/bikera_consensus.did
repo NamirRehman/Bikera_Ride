@@ -1,0 +1,77 @@
+type UserId = principal;
+type UserActivity = 
+ record {
+   antiGamingScore: nat;
+   distance: Distance;
+   isValid: bool;
+   speed: Speed;
+   timestamp: Timestamp;
+   userId: UserId;
+ };
+type Timestamp = int;
+type Speed = nat;
+type RoundId = nat;
+type Result_2 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      totalActivities: nat;
+      totalRounds: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: ConsensusResult;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type Distance = nat;
+type ConsensusResult = 
+ record {
+   antiGamingViolations: nat;
+   averageSpeed: Speed;
+   consensusTime: Timestamp;
+   roundId: RoundId;
+   totalDistance: Distance;
+   totalParticipants: nat;
+   winners: vec UserId;
+ };
+type AntiGamingRule = 
+ record {
+   maxConsecutiveWins: nat;
+   maxDailyWins: nat;
+   maxSpeed: Speed;
+   minDistance: Distance;
+   minTimeBetweenWins: nat;
+   suspiciousPatternThreshold: nat;
+ };
+service : {
+  /// Clear old data (admin only)
+  clearOldData: () -> (Result);
+  getAntiGamingRules: () -> (AntiGamingRule) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_2);
+  getConsensusResult: (RoundId) -> (opt ConsensusResult) query;
+  getDailyWinCount: (UserId) -> (nat) query;
+  getUserActivities: (UserId) -> (vec UserActivity) query;
+  getUserWinHistory: (UserId) -> (vec Timestamp) query;
+  /// Record user activity for validation and scoring
+  recordActivity: (UserId, Distance, Speed) -> (Result);
+  /// Reset user data (admin only)
+  resetUserData: (UserId) -> (Result);
+  /// Select winners based on anti-gaming scores and eligibility
+  selectWinners: (RoundId, vec UserId, nat) -> (Result_1);
+  /// Update anti-gaming rules (admin only)
+  updateAntiGamingRules: (AntiGamingRule) -> (Result);
+}

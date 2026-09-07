@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Internet Identity Bridge - Bikera</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy"
+      content="
+      default-src 'self' https: http://localhost:8000 http://127.0.0.1:8000;
+      script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline';
+      style-src 'self' 'unsafe-inline';
+      img-src 'self' data: blob:;
+      connect-src https: wss: http://localhost:8000 http://127.0.0.1:8000;
+      frame-src https://identity.ic0.app https://*.ic0.app http://localhost:8000 http://127.0.0.1:8000 http://*.localhost:8000;
+    ">
+  <style>
+    :root { --glass: rgba(255,255,255,.12); }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      min-height: 100vh; margin: 0; display: grid; place-items: center;
+      background: linear-gradient(135deg, #ff3eff 0%, #764ba2 100%); color: #fff;
+    }
+    .card { width: 96%; max-width: 560px; text-align: center; padding: 24px; border-radius: 14px;
+      background: var(--glass); backdrop-filter: blur(10px); }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.14);
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+    .btn {
+      margin-top: 16px; padding: 14px 24px; border-radius: 10px;
+      background: #fff; color: #333; font-weight: 600; border: none; cursor: pointer;
+      font-size: 16px; width: 100%; max-width: 300px; transition: transform 0.2s;
+      display: inline-block !important;
+    }
+    .btn:hover { transform: scale(1.02); }
+    .btn:active { transform: scale(0.98); }
+    .btn-success {
+      background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+      color: #fff; font-weight: 700; box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+    }
+    .btn-direct {
+      background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+      color: #fff; font-weight: 700; 
+      box-shadow: 0 6px 20px rgba(8, 145, 178, 0.4);
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      display: inline-block !important;
+      font-size: 17px;
+      padding: 16px 28px;
+      margin-top: 20px;
+    }
+    .btn-direct:hover {
+      transform: scale(1.05);
+      box-shadow: 0 8px 25px rgba(8, 145, 178, 0.5);
+    }
+    .err { display:none; margin-top:12px; padding:12px; border-radius:8px; background: rgba(255,0,0,.22); }
+    .note { opacity:.85; font-size:14px; margin-bottom: 8px; }
+    .hint { margin-top:10px; font-size:13px; opacity:.85; display:none; }
+    .muted { opacity:.7; }
+    .success-message { color: #4ade80; font-weight: 600; margin-top: 12px; }
+    .loading { opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">Bikera</div>
+    <h2 id="title">Sign in to Bikera</h2>
+    <p id="desc" class="note">Use Internet Identity to continue with the same Bikera account across mobile and web.</p>
+    <div id="successMsg" class="success-message" style="display:none"></div>
+    <button id="action" class="btn" style="display:inline-block !important; visibility:visible !important;">🔐 Continue with Internet Identity</button>
+    <!-- <button id="directLink" class="btn btn-direct" style="display:inline-block !important; visibility:visible !important; margin-top:20px;">
+      🔗 Open Internet Identity Directly
+    </button> -->
+    <div id="err" class="err"></div>
+    <div id="hint" class="hint"></div>
+  </div>
+
+  <script type="module">
+    import { AuthClient } from "https://cdn.jsdelivr.net/npm/@dfinity/auth-client/+esm";
+    import { Ed25519PublicKey, Ed25519KeyIdentity, DelegationChain, DelegationIdentity } from "https://cdn.jsdelivr.net/npm/@dfinity/identity/+esm";
+    import { Principal } from "https://cdn.jsdelivr.net/npm/@dfinity/principal/+esm";
+
+    // --- Query Params ---
+    const qs = new URLSearchParams(location.search);
+    const redirectUri   = qs.get("redirect_uri");            // custom scheme: bikera://auth/callback (required)
+    const androidPkg    = qs.get("android_package") || "";   // e.g. com.bikera.mobile
+    const fallbackUrl   = qs.get("fallback_url") || "";      // HTTPS fallback
+    const storeUrl      = qs.get("store_url") || "";         // App Store / Play link
+    const storeTimeout  = Math.max(0, Number(qs.get("store_timeout_ms") || 1200));
+    const universalLink = qs.get("universal_link") || "";    // HTTPS universal link (preferred)
+    const derivationOrigin = qs.get("derivation_origin") || "https://bikera.app";
+    // Always use production Internet Identity
+    // For local development, you can pass identity_provider parameter, but production is recommended
+    const identityProvider = qs.get("identity_provider") || "https://identity.ic0.app";
+    
+    // Get session public key from React Native app (for delegation)
+    const sessionKeyParam = qs.get("session_key");
+    let sessionPublicKey = null;
+    if (sessionKeyParam) {
+      try {
+        const sessionKeyRaw = JSON.parse(decodeURIComponent(sessionKeyParam));
+        const keyBytes = new Uint8Array(sessionKeyRaw);
+        
+        // Validate: Ed25519 public keys must be exactly 32 bytes
+        if (keyBytes.length !== 32) {
+          throw new Error(`Invalid session key length: expected 32 bytes, got ${keyBytes.length}`);
+        }
+        
+        sessionPublicKey = Ed25519PublicKey.fromRaw(keyBytes);
+        console.log('[Bridge] Received session public key from React Native app (32 bytes)');
+      } catch (e) {
+        console.warn('[Bridge] Failed to parse session key:', e);
+        // Don't throw - allow flow to continue without delegation
+      }
+    }
+
+    // --- Elements ---
+    const errBox = document.getElementById("err");
+    const actionBtn = document.getElementById("action");
+    const directLinkBtn = document.getElementById("directLink");
+    const desc = document.getElementById("desc");
+    const hintBox = document.getElementById("hint");
+    const titleEl = document.getElementById("title");
+    const successMsg = document.getElementById("successMsg");
+
+    function showError(msg) { errBox.textContent = msg; errBox.style.display = "block"; }
+    if (!redirectUri) { showError("Missing redirect_uri parameter."); throw new Error("Missing redirect_uri"); }
+
+    // --- UA ---
+    const ua = navigator.userAgent || navigator.vendor || "";
+    const isAndroid = /Android/i.test(ua);
+    const isIOS = /iPhone|iPad|iPod/i.test(ua);
+    const isChrome = /Chrome\/\d+/i.test(ua) && !/Edg\//i.test(ua) && !/OPR\//i.test(ua);
+    const isInAppBrowser = /(FBAN|FBAV|Instagram|Line|Twitter|TikTok|Snapchat|Pinterest|LinkedInApp|VK)/i.test(ua);
+
+    if (isInAppBrowser) {
+      hintBox.style.display = "block";
+      hintBox.innerHTML = `If the sign-in popup doesn't open here, use the <span class='muted'>Share/Open in… → "Open in Safari/Chrome"</span> option and try again.`;
+    }
+
+    function isHTTP(url) { return /^https?:\/\//i.test(url); }
+    function parseScheme(url) {
+      const m = String(url).match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/(.*)$/);
+      return m ? { scheme: m[1], rest: m[2] } : { scheme: "", rest: url };
+    }
+
+    // --- Nav helpers ---
+    function openURLAllWays(url) {
+      try { location.href = url; } catch {}
+      try { location.assign(url); } catch {}
+      try { location.replace(url); } catch {}
+      const a = document.createElement("a");
+      a.href = url; a.style.display = "none"; a.rel = "noopener";
+      document.body.appendChild(a); a.click(); setTimeout(() => document.body.removeChild(a), 0);
+    }
+
+    function openWithIntent(finalUrl) {
+      const { scheme, rest } = parseScheme(finalUrl);
+      if (!scheme || !rest || !androidPkg) return false;
+      const hash =
+        "#Intent"
+        + `;scheme=${encodeURIComponent(scheme)}`
+        + `;package=${encodeURIComponent(androidPkg)}`
+        + `;action=${encodeURIComponent("android.intent.action.VIEW")}`
+        + `;category=${encodeURIComponent("android.intent.category.BROWSABLE")}`
+        + (fallbackUrl ? `;S.browser_fallback_url=${encodeURIComponent(fallbackUrl)}` : "")
+        + ";end";
+      openURLAllWays(`intent://${rest}${hash}`);
+      return true;
+    }
+
+    // iOS auto path (non-gesture) → iframe (works more often than location=)
+    function openWithIOSIframe(url) {
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none"; iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(() => document.body.removeChild(iframe), 1500);
+    }
+
+    function scheduleStoreFallback() {
+      if (!storeUrl || storeTimeout <= 0) return;
+      const t = setTimeout(() => {
+        if (document.visibilityState === "visible") location.href = storeUrl;
+      }, storeTimeout);
+      const cancel = () => clearTimeout(t);
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "visible") cancel(); });
+      window.addEventListener("pagehide", cancel);
+      window.addEventListener("blur", cancel);
+    }
+
+    // --- Globals to hold computed return URLs (used by the button synchronously) ---
+    let lastDeepUrl = "";
+    let lastUniversalUrl = "";
+
+    async function buildFinalUrls(client, principal, delegationChainData) {
+      // IMPORTANT: Return delegation in URI fragment (after #) for security
+      // Fragments are NOT sent to servers, preventing delegation chain from leaking to boundary nodes
+      let fragment = '';
+      
+      if (delegationChainData) {
+        // Return delegation chain in fragment
+        const delegationPayload = {
+          delegationChain: delegationChainData,
+          principal: principal,
+        };
+        fragment = '#' + encodeURIComponent(JSON.stringify(delegationPayload));
+        console.log('[Bridge] Delegation chain will be returned in URI fragment');
+      } else {
+        // Fallback: Return principal in fragment (no delegation available)
+        fragment = '#' + encodeURIComponent(JSON.stringify({ principal: principal }));
+        console.warn('[Bridge] No delegation available, returning principal only');
+      }
+      
+      // Build URLs with fragment (not query params for security)
+      lastDeepUrl = `${redirectUri}${fragment}`;
+      if (universalLink) {
+        lastUniversalUrl = `${universalLink}${fragment}`;
+      } else {
+        lastUniversalUrl = "";
+      }
+      
+      console.log('[Bridge] Built redirect URLs:');
+      console.log('[Bridge] Deep URL (first 150 chars):', lastDeepUrl.substring(0, 150));
+      console.log('[Bridge] Universal URL:', lastUniversalUrl || 'none');
+      console.log('[Bridge] Redirect URI base:', redirectUri);
+    }
+
+    // Non-gesture routing (auto) can remain async
+    function autoRouteToApp() {
+      const deepIsHTTP = isHTTP(lastDeepUrl);
+
+      if (isChrome && lastUniversalUrl) {
+        scheduleStoreFallback();
+        openURLAllWays(lastUniversalUrl);
+        return;
+      }
+
+      if (isAndroid) {
+        if (isChrome && !deepIsHTTP && androidPkg) { openWithIntent(lastDeepUrl); return; }
+        scheduleStoreFallback(); openURLAllWays(lastDeepUrl); return;
+      }
+
+      if (isIOS) {
+        if (!deepIsHTTP) { scheduleStoreFallback(); openWithIOSIframe(lastDeepUrl); }
+        else { openURLAllWays(lastDeepUrl); }
+        return;
+      }
+
+      openURLAllWays(lastDeepUrl);
+    }
+
+    // --- Auth flow ---
+    // Official pattern: Use intermediate session key on bridge side
+    // 1. Bridge generates intermediate session key pair (full identity with private key)
+    // 2. Bridge authenticates with II using intermediate identity
+    // 3. II returns delegation to intermediate key
+    // 4. Bridge creates delegation from intermediate → mobile app's session public key
+    // 5. Bridge combines both delegations into a chain
+    // 6. Bridge returns full chain to mobile app
+    
+    const STORAGE_KEY = 'bikera_ii_identity';
+    let client = null;
+    let intermediateIdentity = null;
+    
+    // Step 1: Generate intermediate session key for the bridge
+    // SECURITY NOTE: The intermediate key can impersonate the user.
+    // Since the proxy frontend is served from the IC, it can be trusted to handle this key properly.
+    // The key is generated in the browser and only exists in memory during the session.
+    // For production, consider using WebCrypto API with unextractable keys for additional security.
+    try {
+      console.log('[Bridge] Generating intermediate session key...');
+      intermediateIdentity = Ed25519KeyIdentity.generate();
+      console.log('[Bridge] Intermediate identity created:', intermediateIdentity.getPrincipal().toText());
+      console.log('[Bridge] ⚠️ Intermediate key is short-lived and only exists in browser memory');
+    } catch (err) {
+      console.error('[Bridge] Failed to generate intermediate identity:', err);
+      showError('Failed to generate session key: ' + (err?.message || err));
+      throw err;
+    }
+    
+    // Step 2: Initialize AuthClient with intermediate identity
+    try {
+      console.log('[Bridge] Creating AuthClient with intermediate identity...');
+      client = await AuthClient.create({ 
+        identity: intermediateIdentity, // Use intermediate identity for II authentication
+        idleOptions: { disableIdle: true },
+        storage: new AuthClientStorage(STORAGE_KEY)
+      });
+      console.log('[Bridge] AuthClient created successfully with intermediate identity');
+    } catch (err) {
+      console.error('[Bridge] Failed to create AuthClient:', err);
+      showError('Failed to initialize authentication: ' + (err?.message || err));
+      actionBtn.style.display = "inline-block";
+      actionBtn.textContent = "❌ Authentication Error";
+      actionBtn.className = "btn";
+      actionBtn.onclick = () => {
+        showError('Please refresh the page and try again.');
+      };
+      throw err;
+    }
+    
+    // Custom storage implementation to use localStorage with a specific key
+    // AuthClient expects get/set/remove methods (not getItem/setItem/removeItem)
+    function AuthClientStorage(key) {
+      this.key = key;
+      
+      // AuthClient expects get() method
+      this.get = async (k) => {
+        try {
+          const all = JSON.parse(localStorage.getItem(this.key) || '{}');
+          return all[k] || null;
+        } catch { return null; }
+      };
+      
+      // AuthClient expects set() method
+      this.set = async (k, v) => {
+        try {
+          const all = JSON.parse(localStorage.getItem(this.key) || '{}');
+          all[k] = v;
+          localStorage.setItem(this.key, JSON.stringify(all));
+        } catch {}
+      };
+      
+      // AuthClient expects remove() method
+      this.remove = async (k) => {
+        try {
+          const all = JSON.parse(localStorage.getItem(this.key) || '{}');
+          delete all[k];
+          localStorage.setItem(this.key, JSON.stringify(all));
+        } catch {}
+      };
+      
+      // Also support getItem/setItem/removeItem for compatibility
+      this.getItem = this.get;
+      this.setItem = this.set;
+      this.removeItem = this.remove;
+    }
+
+    async function startLogin() {
+      errBox.style.display = "none";
+      actionBtn.style.display = "none";
+      successMsg.style.display = "none";
+      titleEl.textContent = "Connecting to Internet Identity…";
+      desc.textContent = "Opening Internet Identity in a new window...";
+      desc.classList.add("loading");
+
+      console.log("[Bridge] Using identity provider:", identityProvider);
+      console.log("[Bridge] Starting login flow...");
+      console.log("[Bridge] Client available:", !!client);
+      
+      // The AuthClient will append #authorize to the identityProvider URL
+      // So https://identity.ic0.app becomes https://identity.ic0.app/#authorize
+
+      try {
+        console.log("[Bridge] Calling client.login()...");
+        // Get the current origin for the redirect
+        const currentOrigin = window.location.origin;
+        const currentPath = window.location.pathname;
+        const currentSearch = window.location.search;
+        const redirectUrl = `${currentOrigin}${currentPath}${currentSearch}`;
+        
+        console.log("[Bridge] Current page URL:", redirectUrl);
+        console.log("[Bridge] Will redirect back to this page after login");
+        
+        await client.login({
+          identityProvider: identityProvider,
+          windowOpenerFeatures: 'left=100,top=100,width=720,height=800,toolbar=0,menubar=0,location=0',
+          maxTimeToLive: BigInt(7 * 24 * 60 * 60 * 1000 * 1000 * 1000), // 7 days
+          derivationOrigin: derivationOrigin,
+        onSuccess: async () => {
+          console.log("[Bridge] Login successful!");
+          try {
+            const identity = await client.getIdentity();
+            const principal = identity.getPrincipal().toText();
+            console.log("[Bridge] Principal:", principal);
+            
+            // Create delegation chain for React Native app (official Internet Computer approach)
+            let delegationChainData = null;
+            
+            if (sessionPublicKey) {
+                // Official pattern: Two-level delegation chain
+                // Step 3: II → intermediate identity (already done by AuthClient.login)
+                // Step 4: intermediate identity → mobile app's session public key
+                try {
+                  console.log('[Bridge] Creating two-level delegation chain...');
+                  console.log('[Bridge] Step 1: II → intermediate identity (done by login)');
+                  console.log('[Bridge] Step 2: intermediate identity → mobile session key');
+                  
+                  // Get Principal from mobile app's session public key (for logging)
+                  let sessionPrincipal;
+                  if (typeof sessionPublicKey.toRaw === 'function') {
+                    const publicKeyRaw = sessionPublicKey.toRaw();
+                    sessionPrincipal = Principal.selfAuthenticating(new Uint8Array(publicKeyRaw));
+                    console.log('[Bridge] Mobile session principal:', sessionPrincipal.toText());
+                  } else {
+                    throw new Error('sessionPublicKey.toRaw() is not a function');
+                  }
+                  
+                  // Create delegation from intermediate identity → mobile session key
+                  // Now we can use DelegationChain.create() because we have a full identity (intermediateIdentity)
+                  console.log('[Bridge] Creating delegation: intermediate → mobile session key');
+                  
+                  // Calculate expiration time (7 days from now)
+                  // DelegationChain.create() requires Date object, not BigInt
+                  const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+                  console.log('[Bridge] TTL: 7 days');
+                  
+                  // Validate session public key
+                  if (!sessionPublicKey || typeof sessionPublicKey.toRaw !== 'function') {
+                    throw new Error('Invalid session public key');
+                  }
+                  
+                  console.log('[Bridge] Session public key validated');
+                  console.log('[Bridge] About to call DelegationChain.create()...');
+                  
+                  // CRITICAL: Use Date for expiration (not BigInt)
+                  // DelegationChain.create() expects Date as 3rd parameter
+                  const expirationDate = new Date(Date.now() + TTL_MS);
+                  console.log('[Bridge] Calculated expiration (Date):', expirationDate.toISOString());
+                  
+                  // Validate expiration date
+                  if (isNaN(expirationDate.getTime())) {
+                    throw new Error('Invalid expiration date');
+                  }
+                  
+                  console.log('[Bridge] All identity methods validated, creating delegation...');
+                  
+                  // Extract II → intermediate delegation using duck-typing (not instanceof)
+                  // This avoids issues with multiple copies of the identity package
+                  const iiIdentity = await client.getIdentity();
+                  console.log('[Bridge] II identity principal:', iiIdentity.getPrincipal().toText());
+                  console.log('[Bridge] Intermediate identity principal:', intermediateIdentity.getPrincipal().toText());
+                  
+                  // Check if II identity has getDelegation() method (duck-typing for DelegationIdentity)
+                  const previousDelegation = typeof iiIdentity?.getDelegation === 'function'
+                    ? iiIdentity.getDelegation()
+                    : null;
+                  
+                  if (previousDelegation) {
+                    console.log('[Bridge] ✅ Found II → intermediate delegation chain');
+                    console.log('[Bridge] Previous delegation has', previousDelegation.delegations?.length || 0, 'delegations');
+                  } else {
+                    console.warn('[Bridge] ⚠️ No previous delegation found (II → intermediate)');
+                  }
+                  
+                  // Create delegation chain with previous delegation to build full chain
+                  // This creates: II → intermediate → mobile (2-level chain)
+                  console.log('[Bridge] Creating delegation chain with previous delegation...');
+                  let intermediateToMobileChain;
+                  try {
+                    intermediateToMobileChain = await DelegationChain.create(
+                      intermediateIdentity,      // Signer: intermediate identity (we have the private key)
+                      sessionPublicKey,         // Target: mobile session public key (not identity wrapper)
+                      expirationDate,          // Expiration: Date object (required by library)
+                      previousDelegation ? { previous: previousDelegation } : undefined  // Previous chain: II → intermediate
+                    );
+                    
+                    console.log('[Bridge] ✅ Created delegation chain successfully');
+                    if (previousDelegation) {
+                      console.log('[Bridge] Full 2-level chain: II → intermediate → mobile');
+                    } else {
+                      console.warn('[Bridge] Single-level chain: intermediate → mobile (missing II delegation)');
+                    }
+                  } catch (createErr) {
+                    console.error('[Bridge] DelegationChain.create() failed:', createErr);
+                    throw createErr;
+                  }
+                  
+                  // The finalDelegationChain is already the complete chain (with previous included)
+                  const finalDelegationChain = intermediateToMobileChain;
+                
+                console.log('[Bridge] Final delegation chain created successfully');
+                
+                // Serialize delegation chain for transfer
+                delegationChainData = finalDelegationChain.toJSON();
+                console.log('[Bridge] Created delegation chain for React Native app');
+                console.log('[Bridge] Delegation chain keys:', Object.keys(delegationChainData));
+              } catch (delegationErr) {
+                console.error('[Bridge] Failed to create delegation:', delegationErr);
+                console.error('[Bridge] Error type:', delegationErr?.constructor?.name);
+                console.error('[Bridge] Error message:', delegationErr?.message);
+                console.error('[Bridge] Error stack:', delegationErr?.stack);
+                // Show error on screen
+                showError('Failed to create delegation: ' + (delegationErr?.message || String(delegationErr)));
+              }
+            } else {
+              console.warn('[Bridge] No session public key provided, skipping delegation creation');
+            }
+            
+            // Precompute URLs with delegation in URI fragment (secure - not sent to servers)
+            await buildFinalUrls(client, principal, delegationChainData);
+          } catch (e) {
+            showError("Login succeeded, but preparing redirect failed: " + (e?.message || e));
+            return;
+          }
+
+          // Update UI to show success
+          titleEl.textContent = "✅ Authentication Successful!";
+          desc.textContent = "Redirecting back to app...";
+          desc.classList.remove("loading");
+          successMsg.textContent = "If redirect doesn't work, tap the button below.";
+          successMsg.style.display = "block";
+
+          // Try to auto-redirect after a short delay
+          const target = lastUniversalUrl || lastDeepUrl;
+          console.log("[Bridge] Login successful, preparing redirect");
+          console.log("[Bridge] Target URL:", target);
+          console.log("[Bridge] Platform:", isIOS ? "iOS" : isAndroid ? "Android" : "Desktop");
+          
+          // Show the Open App button as fallback
+          actionBtn.style.display = "inline-block";
+          actionBtn.textContent = "🚀 Open App";
+          actionBtn.className = "btn btn-success";
+          
+          // Function to handle redirect
+          function performRedirect() {
+            if (!target) {
+              console.error("[Bridge] No target URL available");
+              showError("No return URL available. Please try again.");
+              return;
+            }
+            
+            console.log("[Bridge] Attempting redirect to:", target.substring(0, 100));
+            console.log("[Bridge] Window opener exists:", !!window.opener);
+            console.log("[Bridge] Is popup window:", window.opener !== null);
+            console.log("[Bridge] Current window location:", window.location.href);
+            
+            try {
+              // If we're in a popup (opened by AuthClient), try to redirect parent and close popup
+              if (window.opener && !window.opener.closed) {
+                console.log("[Bridge] We're in a popup, redirecting parent window");
+                try {
+                  // Try to redirect the parent window to the app
+                  console.log("[Bridge] Redirecting parent to:", target);
+                  window.opener.location.href = target;
+                  // Also try postMessage as fallback
+                  try {
+                    window.opener.postMessage({ type: 'II_REDIRECT', url: target }, '*');
+                  } catch (e) {
+                    console.log("[Bridge] postMessage failed:", e);
+                  }
+                  // Close this popup after a short delay
+                  setTimeout(() => {
+                    try {
+                      console.log("[Bridge] Closing popup window");
+                      window.close();
+                    } catch (e) {
+                      console.log("[Bridge] Could not close popup:", e);
+                    }
+                  }, 1000);
+                  return;
+                } catch (e) {
+                  console.warn("[Bridge] Could not redirect parent window:", e);
+                  // Fall through to direct navigation
+                }
+              }
+              
+              // Direct navigation (for when not in popup, or popup redirect failed)
+              // This handles the case when bridge is opened directly (not in popup)
+              console.log("[Bridge] Not in popup, using direct navigation");
+              if (isAndroid && androidPkg && !isHTTP(target)) {
+                // Use Android Intent for better reliability
+                console.log("[Bridge] Using Android Intent");
+                openWithIntent(target);
+                // Also try direct as fallback
+                setTimeout(() => openURLAllWays(target), 300);
+              } else if (isIOS && !isHTTP(target)) {
+                // Use iframe method for iOS
+                console.log("[Bridge] Using iOS iframe method");
+                openWithIOSIframe(target);
+                // Also try direct as fallback
+                setTimeout(() => openURLAllWays(target), 300);
+              } else {
+                // Direct navigation
+                console.log("[Bridge] Using direct navigation");
+                openURLAllWays(target);
+              }
+            } catch (err) {
+              console.error("[Bridge] Redirect error:", err);
+              showError("Failed to redirect. Please tap the button below.");
+            }
+          }
+          
+          // Auto-redirect after 500ms (gives time for UI update)
+          setTimeout(performRedirect, 500);
+          
+          // Also set up button click handler as fallback
+          actionBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log("[Bridge] Open App button clicked");
+            performRedirect();
+          };
+          
+          // End of redirect logic
+        },
+        onError: (e) => {
+          titleEl.textContent = "Authentication Failed";
+          desc.textContent = "There was an error during authentication.";
+          desc.classList.remove("loading");
+          const errorMsg = e?.message || e?.toString() || String(e);
+          console.error("Login error:", errorMsg);
+          showError("Authentication failed: " + errorMsg);
+          
+          // If popup was blocked, show helpful message
+          if (errorMsg.includes("popup") || errorMsg.includes("blocked") || errorMsg.includes("window")) {
+            desc.textContent = "Popup may have been blocked. Please allow popups for this site and try again.";
+            hintBox.style.display = "block";
+            hintBox.innerHTML = `If the popup didn't open, check your browser settings to allow popups for this site.`;
+          }
+          
+          actionBtn.style.display = "inline-block";
+          actionBtn.textContent = "🔄 Try Again";
+          actionBtn.className = "btn";
+          actionBtn.onclick = () => {
+            // Reset UI
+            titleEl.textContent = "Connecting to Internet Identity…";
+            hintBox.style.display = "none";
+            startLogin();
+          }; // keep gesture path alive
+        },
+        });
+        
+        console.log("[Bridge] Login call completed, waiting for user interaction in popup...");
+      } catch (error) {
+        // Catch any errors during login() call itself
+        console.error("[Bridge] Failed to start login:", error);
+        console.error("[Bridge] Error details:", {
+          message: error?.message,
+          stack: error?.stack,
+          name: error?.name
+        });
+        
+        titleEl.textContent = "Error Starting Login";
+        desc.textContent = "Could not open Internet Identity. Please try again.";
+        desc.classList.remove("loading");
+        
+        let errorMessage = "Error: " + (error?.message || error);
+        if (error?.message?.includes("popup") || error?.message?.includes("blocked")) {
+          errorMessage = "Popup was blocked. Please allow popups for this site and try again.";
+          hintBox.style.display = "block";
+          hintBox.innerHTML = `Your browser blocked the popup. Please:<br>1. Allow popups for this site<br>2. Click the button again`;
+        }
+        
+        showError(errorMessage);
+        actionBtn.style.display = "inline-block";
+        actionBtn.textContent = "🔄 Try Again";
+        actionBtn.className = "btn";
+        actionBtn.onclick = () => {
+          titleEl.textContent = "Connecting to Internet Identity…";
+          hintBox.style.display = "none";
+          startLogin();
+        };
+      }
+    }
+
+    function showTapToLogin() {
+      console.log('[Bridge] showTapToLogin() called');
+      console.log('[Bridge] actionBtn element:', actionBtn);
+      console.log('[Bridge] actionBtn current display:', actionBtn?.style?.display);
+      
+      if (!actionBtn) {
+        console.error('[Bridge] ERROR: actionBtn element not found!');
+        return;
+      }
+      
+      errBox.style.display = "none";
+      successMsg.style.display = "none";
+      titleEl.textContent = "Sign in with Internet Identity";
+      desc.textContent = "Tap the button below to open Internet Identity and sign in.";
+      desc.classList.remove("loading");
+      
+      // Force show the main login button
+      actionBtn.style.display = "inline-block";
+      actionBtn.style.visibility = "visible";
+      actionBtn.textContent = "🔐 Sign in with Internet Identity";
+      actionBtn.className = "btn";
+      
+      // Also show the direct link button as a fallback
+      if (directLinkBtn) {
+        directLinkBtn.style.display = "inline-block";
+        directLinkBtn.style.visibility = "visible";
+        // Set up click handler to open Internet Identity in the same window
+        directLinkBtn.onclick = function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          console.log('[Bridge] Direct link button clicked - opening Internet Identity in same window');
+          // Open Internet Identity in the same window (not new tab)
+          window.location.href = 'https://identity.ic0.app';
+        };
+        console.log('[Bridge] Direct link button shown');
+      }
+      
+      console.log('[Bridge] Button should now be visible. Display:', actionBtn.style.display);
+      console.log('[Bridge] Button visibility:', actionBtn.style.visibility);
+      console.log('[Bridge] Button text:', actionBtn.textContent);
+      // CRITICAL: Must be a direct user gesture - no async/await in onclick
+      actionBtn.onclick = function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log("[Bridge] Button clicked, starting login...");
+        console.log("[Bridge] Client available:", !!client);
+        console.log("[Bridge] Identity provider:", identityProvider);
+        
+        // Immediately update UI to show we're starting
+        actionBtn.style.display = "none";
+        titleEl.textContent = "Connecting to Internet Identity…";
+        desc.textContent = "Opening Internet Identity popup...";
+        desc.classList.add("loading");
+        
+        // Call startLogin - it will handle errors internally
+        startLogin().catch(err => {
+          console.error("[Bridge] Login promise rejected:", err);
+          showError("Failed to start login: " + (err?.message || err));
+          actionBtn.style.display = "inline-block";
+          actionBtn.textContent = "🔄 Try Again";
+          actionBtn.className = "btn";
+        });
+      };
+    }
+
+    // --- Startup ---
+    // IMPORTANT: Always show button first to ensure user gesture
+    // Browsers block popups that aren't triggered by direct user interaction
+    // This prevents popup blockers from blocking the Internet Identity window
+    console.log("Initializing bridge, showing login button...");
+    console.log("Client initialized:", !!client);
+    console.log("actionBtn element exists:", !!actionBtn);
+    console.log("actionBtn initial display:", actionBtn?.style?.display);
+    
+    // Show the button now that client is ready
+    try {
+      showTapToLogin();
+      console.log("showTapToLogin() completed successfully");
+    } catch (err) {
+      console.error("Error in showTapToLogin():", err);
+      // Fallback: try to show button directly
+      if (actionBtn) {
+        actionBtn.style.display = "inline-block";
+        actionBtn.textContent = "🔐 Sign in with Internet Identity";
+        actionBtn.className = "btn";
+      }
+    }
+    
+    // Note: We don't auto-start anymore because browsers block popups without user gestures
+    // The user must click the button to trigger the login popup
+
+    // Debug handle
+    window.__IIBridge = { startLogin, showTapToLogin };
+  </script>
+</body>
+</html>

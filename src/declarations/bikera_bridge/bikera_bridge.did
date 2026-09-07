@@ -1,0 +1,96 @@
+type UserId = principal;
+type TokenAmount = nat;
+type Timestamp = int;
+type SolanaAddress = text;
+type Result_1 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      pendingRequests: nat;
+      totalRequests: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type BridgeStatus = 
+ variant {
+   Cancelled;
+   Completed;
+   Failed;
+   Pending;
+   Processing;
+ };
+type BridgeRequest = 
+ record {
+   amount: TokenAmount;
+   createdAt: Timestamp;
+   errorMessage: opt text;
+   id: text;
+   processedAt: opt Timestamp;
+   solanaAddress: SolanaAddress;
+   status: BridgeStatus;
+   transactionHash: opt text;
+   userId: UserId;
+ };
+type BridgeConfig = 
+ record {
+   bridgeFee: TokenAmount;
+   dailyBridgeLimit: TokenAmount;
+   maxBridgeAmount: TokenAmount;
+   maxPendingRequests: nat;
+   minBridgeAmount: TokenAmount;
+   processingDelay: nat;
+ };
+service : {
+  /// Cancel bridge request
+  cancelBridgeRequest: (text) -> (Result);
+  /// Clear old bridge data (admin only)
+  clearOldData: () -> (Result);
+  /// Mark a Processing bridge request as Completed with the Solana transaction signature (admin only).
+  /// This is the multisig-friendly completion step: your off-chain multisig relayer signs/sends the tx,
+  /// then calls this method with the finalized Solana signature for auditability/UI display.
+  completeBridgeRequest: (text, text) -> (Result);
+  /// Pause bridge operations (admin only)
+  emergencyPause: () -> (Result);
+  /// Resume bridge operations (admin only)
+  emergencyResume: () -> (Result);
+  /// Fail a Processing bridge request (admin only). Useful for multisig rejection or Solana-side failures.
+  failBridgeRequest: (text, text) -> (Result);
+  /// Generate weekly CSV report for manual Solana distribution (admin only)
+  generateWeeklyClaimReport: () -> (Result);
+  /// Get current admin principal (read-only)
+  getAdminPrincipal: () -> (principal) query;
+  /// Get bridge configuration
+  getBridgeConfig: () -> (BridgeConfig) query;
+  /// Get bridge request status
+  getBridgeRequest: (text) -> (opt BridgeRequest) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_1);
+  /// Get daily bridge amount for user
+  /// Get all pending bridge requests (admin only)
+  getPendingBridgeRequests: () -> (vec BridgeRequest) query;
+  /// Get user's bridge history
+  getUserBridgeHistory: (UserId, opt nat) -> (vec BridgeRequest) query;
+  /// Initialize admin principal (one-time setup)
+  initializeAdmin: (principal) -> (Result);
+  /// Check if the bridge is paused
+  isBridgePaused: () -> (bool) query;
+  /// Process bridge request (admin only)
+  processBridgeRequest: (text) -> (Result);
+  /// Request to bridge iMERA tokens to Solana
+  requestBridge: (SolanaAddress, TokenAmount) -> (Result);
+  /// Set canister references (admin only)
+  setCanisterReferences: (principal, principal) -> (Result);
+  /// Update bridge configuration (admin only)
+  updateBridgeConfig: (BridgeConfig) -> (Result);
+}

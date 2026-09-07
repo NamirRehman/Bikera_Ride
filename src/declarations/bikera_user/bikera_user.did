@@ -1,0 +1,240 @@
+type UserStats = 
+ record {
+   achievements: nat;
+   avgSpeed: Speed;
+   currentStreak: nat;
+   friends: nat;
+   longestSession: nat;
+   longestStreak: nat;
+   maxSpeed: Speed;
+   totalDistance: Distance;
+   totalSessions: nat;
+   totalTime: nat;
+ };
+type UserProfile = 
+ record {
+   achievements: vec text;
+   avatar: opt text;
+   bio: opt text;
+   createdAt: Timestamp;
+   displayName: opt text;
+   email: opt text;
+   id: UserId;
+   isActive: bool;
+   isVerified: bool;
+   lastActivity: Timestamp;
+   preferences: UserPreferences;
+   privacySettings: PrivacySettings;
+   referralCode: text;
+   referredBy: opt UserId;
+   socialLinks: SocialLinks;
+   solanaAddress: opt text;
+   totalDistance: Distance;
+   totalIMERA: TokenAmount;
+   totalXP: nat;
+   updatedAt: Timestamp;
+   username: text;
+ };
+type UserPreferences = 
+ record {
+   autoStart: bool;
+   dataSharing: bool;
+   language: text;
+   notifications: NotificationSettings;
+   theme: text;
+   units: text;
+   voiceGuidance: bool;
+ };
+type UserId = principal;
+type UserDashboardSnapshot = 
+ record {
+   achievements: vec text;
+   friends: vec UserId;
+   lastActivity: Timestamp;
+   profile: UserProfile;
+   recentSessions: vec ActivitySession;
+   referralCode: text;
+   stats: UserStats;
+ };
+type ReferralSummary =
+ record {
+   totalReferrals: nat;
+   referredUsers: vec UserId;
+ };
+type TokenAmount = nat;
+type Timestamp = int;
+type Speed = nat;
+type SocialLinks = 
+ record {
+   instagram: opt text;
+   strava: opt text;
+   twitter: opt text;
+   website: opt text;
+ };
+type RideSummary = 
+ record {
+   avgSpeed: Speed;
+   distance: Distance;
+   duration: nat;
+   endPoint:
+    record {
+      accuracy: opt float64;
+      latitude: float64;
+      longitude: float64;
+      timestamp: Timestamp;
+    };
+   maxSpeed: Speed;
+   pointCount: nat;
+   routePoints: vec LocationPoint;
+   startPoint:
+    record {
+      accuracy: opt float64;
+      latitude: float64;
+      longitude: float64;
+      timestamp: Timestamp;
+    };
+   timestamp: Timestamp;
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      activeSessions: nat;
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      totalUsers: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: UserProfile;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type PrivacySettings = 
+ record {
+   allowFriendRequests: bool;
+   profileVisibility: text;
+   showAchievements: bool;
+   showDistance: bool;
+   showLocation: bool;
+   showSpeed: bool;
+ };
+type NotificationSettings = 
+ record {
+   achievements: bool;
+   email: bool;
+   marketing: bool;
+   push: bool;
+   rewards: bool;
+   social: bool;
+ };
+type LocationPoint = 
+ record {
+   accuracy: opt float64;
+   latitude: float64;
+   longitude: float64;
+   timestamp: Timestamp;
+ };
+type FriendRequest = 
+ record {
+   createdAt: Timestamp;
+   from: UserId;
+   id: text;
+   respondedAt: opt Timestamp;
+   status: text;
+   to: UserId;
+ };
+type Distance = nat;
+type ActivitySession = 
+ record {
+   avgSpeed: Speed;
+   distance: Distance;
+   duration: nat;
+   endTime: opt Timestamp;
+   id: text;
+   isActive: bool;
+   maxSpeed: Speed;
+   route: vec LocationPoint;
+   startTime: Timestamp;
+   userId: UserId;
+ };
+service : {
+  /// Clear user data (admin only)
+  clearUserData: (UserId) -> (Result);
+  /// Deactivate user (admin only)
+  deactivateUser: (UserId) -> (Result);
+  endActivitySession: (text, UserId) -> (Result);
+  /// Complete GDPR-compliant data erasure (user or admin)
+  /// This will cascade delete across all canisters
+  eraseUserDataGDPR: (UserId) -> (Result);
+  /// Get users who were active within the specified timeframe
+  /// Used by Main canister to determine eligible miners for each round
+  getActiveUsers: (Timestamp) -> (vec UserId) query;
+  /// Get count of currently active users (for admin/stats)
+  getActiveUsersCount: () -> (nat) query;
+  getActivitySession: (UserId, text) -> (opt ActivitySession) query;
+  /// Get activity sessions with pagination (limit and offset)
+  /// Returns sessions sorted by startTime (newest first)
+  /// Default: limit=20, offset=0
+  getActivitySessions: (UserId, opt nat, opt nat) ->
+   (vec ActivitySession) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_2);
+  getCurrentUserProfile: (UserId) -> (opt UserProfile) query;
+  getReferralSummary: (UserId) -> (ReferralSummary) query;
+  getFriendRequests: (UserId, opt nat) -> (vec FriendRequest) query;
+  getFriends: (UserId) -> (vec UserId) query;
+  getLeaderboard: (nat) -> (vec record {
+                                  UserId;
+                                  Distance;
+                                }) query;
+  /// Get Solana address for user
+  getSolanaAddress: (UserId) -> (opt text) query;
+  /// Get total count of registered users
+  getTotalUsersCount: () -> (nat) query;
+  /// Get complete user dashboard data in single query
+  /// This replaces multiple separate queries:
+  /// - getUserProfile()
+  /// - getUserStats()
+  /// - getActivitySessions()
+  /// - getFriends()
+  /// Result: 1 call instead of 4+ calls (6X reduction)
+  getUserDashboardSnapshot: (UserId) -> (opt UserDashboardSnapshot) query;
+  getUserProfile: (UserId) -> (opt UserProfile) query;
+  getUserStats: (UserId) -> (UserStats) query;
+  /// Record user activity (called when user submits movement data)
+  recordUserActivity: (UserId) -> ();
+  /// Register a new user with profile information
+  registerUser: (text, opt text, opt text, opt text, UserId) -> (Result_1);
+  respondToFriendRequest: (text, bool, UserId) -> (Result);
+  /// Send friend request to another user
+  sendFriendRequest: (UserId, UserId) -> (Result);
+  /// Start a new activity tracking session
+  startActivitySession: (UserId) -> (Result);
+  updateActivitySession: (text, Distance, Speed, Speed, opt LocationPoint,
+   UserId) -> (Result);
+  updateActivitySessionWithPoints: (text, Distance, Speed, Speed,
+   vec LocationPoint, UserId) -> (Result);
+  /// Update activity session with summary (batch update)
+  /// More efficient than updating point-by-point
+  /// Reduces canister writes by 50-100X
+  updateActivitySessionWithSummary: (UserId, RideSummary) -> (Result);
+  updatePreferences: (UserPreferences, UserId) -> (Result);
+  updatePrivacySettings: (PrivacySettings, UserId) -> (Result);
+  updateProfile: (opt text, opt text, opt text, opt text, opt text,
+   opt SocialLinks, UserId) -> (Result);
+  /// Update Solana address for user (address validation should be done on frontend)
+  updateSolanaAddress: (opt text, UserId) -> (Result);
+  /// Verify user account (admin only)
+  verifyUser: (UserId) -> (Result);
+}

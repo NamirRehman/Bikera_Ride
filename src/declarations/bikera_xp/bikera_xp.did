@@ -1,0 +1,151 @@
+type XPTransaction = 
+ record {
+   amount: XPAmount;
+   distance: opt Distance;
+   metadata: opt text;
+   reason: XPReason;
+   timestamp: Timestamp;
+   userId: UserId;
+ };
+type XPSnapshot = 
+ record {
+   dailyXP: XPAmount;
+   level: nat;
+   levelProgress: float64;
+   nextLevelXP: XPAmount;
+   recentTransactions: vec XPTransaction;
+   totalXP: XPAmount;
+   weeklyXP: XPAmount;
+ };
+type XPReason = 
+ variant {
+   Achievement: text;
+   Distance: Distance;
+   Mining: nat;
+   Penalty: text;
+   Referral: UserId;
+ };
+type XPAmount = nat;
+type UserXPProfile = 
+ record {
+   achievements: vec text;
+   currentLevel: nat;
+   lastActivity: Timestamp;
+   lastStreakDay: opt Day;
+   referralCount: nat;
+   streakDays: nat;
+   totalDistance: Distance;
+   totalXP: XPAmount;
+   userId: UserId;
+   xpToNextLevel: XPAmount;
+ };
+type UserId = principal;
+type Timestamp = int;
+type TimeFilter = 
+ variant {
+   AllTime;
+   Daily;
+   Monthly;
+   Weekly;
+ };
+type Result_3 = 
+ variant {
+   err: text;
+   ok: XPAmount;
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      totalUsers: nat;
+      totalXP: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: nat;
+ };
+type LevelConfig = 
+ record {
+   benefits: vec text;
+   level: nat;
+   requiredXP: XPAmount;
+ };
+type Distance = nat;
+type Day = nat;
+type Achievement = 
+ record {
+   description: text;
+   id: text;
+   isUnlocked: bool;
+   name: text;
+   requiredXP: XPAmount;
+   reward: XPAmount;
+ };
+service : {
+  addAchievementXP: (UserId, text) -> (Result_3);
+  addDistanceXP: (UserId, Distance) -> (Result_3);
+  /// Add distance XP in batch (more efficient)
+  /// Reduces canister writes by 10-50X
+  addDistanceXPBatch: (UserId, Distance) -> (Result_3);
+  addMiningBonus: (UserId, XPAmount) -> (Result_3);
+  addReferralBonus: (UserId, UserId) -> (Result_3);
+  /// Add XP to user with reason and metadata
+  addXP: (UserId, XPAmount, XPReason, opt Distance, opt text) -> (Result_3);
+  applyPenalty: (UserId, XPAmount, text) -> (Result_3);
+  /// Clear old transactions (admin only)
+  clearOldTransactions: () -> (Result_1);
+  getAchievementDefinitions: () -> (vec Achievement) query;
+  getAchievements: (UserId) -> (vec text) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_2);
+  getDailyXPClaimed: (UserId, Day) -> (XPAmount) query;
+  getLeaderboard: (nat) -> (vec record {
+                                  UserId;
+                                  XPAmount;
+                                }) query;
+  /// Get leaderboard with time filter
+  getLeaderboardWithFilter: (nat, TimeFilter) ->
+   (vec record {
+          UserId;
+          XPAmount;
+        }) query;
+  getLevel: (UserId) -> (nat) query;
+  getLevelConfigs: () -> (vec LevelConfig) query;
+  getPublicUserXPProfile: (UserId) -> (UserXPProfile) query;
+  getReferralCount: (UserId) -> (nat) query;
+  getStreakDays: (UserId) -> (nat) query;
+  getTotalDistance: (UserId) -> (Distance) query;
+  getTotalXP: (UserId) -> (XPAmount) query;
+  /// Get complete XP data in single query
+  /// Replaces: getTotalXP(), getLevel(), getXPTransactions(), getXPToNextLevel()
+  /// Result: 1 call instead of 4+ calls (4X reduction)
+  getXPSnapshot: (UserId) -> (XPSnapshot) query;
+  getXPToNextLevel: (UserId) -> (XPAmount) query;
+  getXPTransactions: (UserId, opt nat) -> (vec XPTransaction) query;
+  /// Check if automated XP minting is active
+  isAutomatedXPMintingActive: () -> (bool) query;
+  /// Reset user XP data (admin only)
+  resetUserXP: (UserId) -> (Result_1);
+  /// Start automated 2-day batch XP minting
+  startAutomatedXPMinting: () -> (Result_1);
+  /// Stop automated XP minting
+  stopAutomatedXPMinting: () -> (Result_1);
+  /// Update level configurations (admin only)
+  updateLevelConfigs: (vec LevelConfig) -> (Result_1);
+  /// Update user daily streak and award bonus XP
+  updateStreak: (UserId) -> (Result);
+}

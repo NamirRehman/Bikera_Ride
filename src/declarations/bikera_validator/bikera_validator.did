@@ -1,0 +1,152 @@
+type ValidationViolation = 
+ record {
+   description: text;
+   severity: text;
+   timestamp: Timestamp;
+   violationType: text;
+ };
+type ValidationResult = 
+ record {
+   avgSpeed: Speed;
+   confidence: float64;
+   distance: Distance;
+   duration: nat;
+   isValid: bool;
+   maxSpeed: Speed;
+   qualityScore: float64;
+   violations: vec ValidationViolation;
+ };
+type ValidationConfig = 
+ record {
+   gpsDriftThreshold: float64;
+   maxGapTime: nat;
+   maxPoints: nat;
+   maxSpeed: Speed;
+   minAccuracy: float64;
+   minDistance: Distance;
+   minPoints: nat;
+   speedChangeThreshold: float64;
+   suspiciousPatternThreshold: float64;
+ };
+type UserId = principal;
+type Timestamp = int;
+type Speed = nat;
+type ShadowProof = 
+ record {
+   batchHash: text;
+   merkleRoot: text;
+   pointCount: nat;
+   timestamp: nat;
+ };
+type ShadowBatchSummary = 
+ record {
+   avgSpeed: float64;
+   distance: nat;
+   duration: nat;
+   maxSpeed: float64;
+ };
+type ShadowBatch = 
+ record {
+   proof: ShadowProof;
+   summary: ShadowBatchSummary;
+   userId: principal;
+   workerId: text;
+ };
+type RouteValidation = 
+ record {
+   avgSpeed: Speed;
+   createdAt: Timestamp;
+   duration: nat;
+   isValid: bool;
+   maxSpeed: Speed;
+   points: vec LocationPoint;
+   qualityScore: float64;
+   routeId: text;
+   totalDistance: Distance;
+   userId: UserId;
+   violations: vec ValidationViolation;
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      registeredWorkers: nat;
+      totalRoutes: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: ValidationResult;
+ };
+type MovementAggregate = 
+ record {
+   avgSpeed: Speed;
+   distance: Distance;
+   duration: nat;
+   maxSpeed: Speed;
+   sampleCount: nat;
+   signature: opt blob;
+   timestamp: Timestamp;
+ };
+type LocationPoint = 
+ record {
+   accuracy: opt float64;
+   altitude: opt float64;
+   heading: opt float64;
+   latitude: float64;
+   longitude: float64;
+   timestamp: Timestamp;
+ };
+type Distance = nat;
+type AntiGamingRule = 
+ record {
+   maxConsecutiveIdentical: nat;
+   maxIdenticalRoutes: nat;
+   maxRoutesPerDay: nat;
+   minTimeBetweenRoutes: nat;
+   suspiciousLocationThreshold: float64;
+ };
+service : {
+  /// Clear old data (admin only)
+  clearOldData: () -> (Result_1);
+  /// Clear user data (admin only)
+  clearUserData: (UserId) -> (Result_1);
+  getAntiGamingRules: () -> (AntiGamingRule) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_2);
+  /// Get registered workers (admin only)
+  getRegisteredWorkers: () -> (vec text) query;
+  getSuspiciousPatterns: (UserId) -> (vec text) query;
+  getUserDailyRouteCount: (UserId, nat) -> (nat) query;
+  getUserRouteHistory: (UserId, opt nat) -> (vec RouteValidation) query;
+  getValidationConfig: () -> (ValidationConfig) query;
+  getValidationResult: (text) -> (opt RouteValidation) query;
+  /// Mark suspicious pattern (admin only)
+  markSuspiciousPattern: (UserId, text) -> (Result_1);
+  /// Register shadow worker (admin only)
+  registerWorker: (text) -> (Result_1);
+  /// Submit validated batch from shadow worker
+  submitValidatedBatch: (ShadowBatch) -> (Result);
+  /// Update anti-gaming rules (admin only)
+  updateAntiGamingRules: (AntiGamingRule) -> (Result_1);
+  /// Update validation configuration (admin only)
+  updateValidationConfig: (ValidationConfig) -> (Result_1);
+  /// Validate movement aggregate (NO GPS coordinates processed)
+  /// This is the PREFERRED method for privacy compliance
+  validateMovementAggregate: (UserId, MovementAggregate) -> (Result);
+  /// Validate GPS route data for authenticity and quality
+  validateRoute: (UserId, vec LocationPoint) -> (Result);
+}

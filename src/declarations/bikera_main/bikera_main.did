@@ -1,0 +1,192 @@
+type UserId = principal;
+type TokenAmount = nat;
+type Timestamp = int;
+type SystemStats = 
+ record {
+   activeUsers: nat;
+   systemUptime: Timestamp;
+   totalIMERAClaimed: TokenAmount;
+   totalIMERAMined: TokenAmount;
+   totalRounds: nat;
+   totalUsers: nat;
+   totalXP: nat;
+ };
+type SystemConfig = 
+ record {
+   claimCooldown: nat;
+   foundationShare: nat;
+   globalSolanaCap: TokenAmount;
+   maxClaimPercentage: nat;
+   maxDailyWins: nat;
+   maxSpeed: Speed;
+   maxWinnersPerRound: nat;
+   minDistancePerRound: Distance;
+   miningInterval: nat;
+   premineAmount: TokenAmount;
+   tokensPerRound: TokenAmount;
+ };
+type Speed = nat;
+type RoundId = nat;
+type Result_6 = 
+ variant {
+   err: text;
+   ok: vec UserId;
+ };
+type Result_5 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      currentRoundId: RoundId;
+      cycles: nat;
+      isPaused: bool;
+      memorySize: nat;
+      systemConfig: SystemConfig;
+      totalRounds: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_4 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      closed: nat;
+      inProgress: nat;
+      pending: nat;
+      resolved: nat;
+      total: nat;
+    };
+ };
+type Result_3 = 
+ variant {
+   err: text;
+   ok: ContactSubmission;
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      isPaused: bool;
+      memorySize: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: ContactId;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type MiningRoundSnapshot = 
+ record {
+   currentRound: opt MiningRound;
+   roundHistory: vec MiningRound;
+   topWinners: vec UserId;
+   userRank: opt nat;
+   userTotalDistance: Distance;
+   userWins: nat;
+ };
+type MiningRound = 
+ record {
+   activeUsers: vec UserId;
+   endTime: Timestamp;
+   id: RoundId;
+   isCompleted: bool;
+   startTime: Timestamp;
+   totalMined: TokenAmount;
+   winners: vec UserId;
+ };
+type Distance = nat;
+type ContactSubmission = 
+ record {
+   adminNotes: opt text;
+   email: text;
+   id: ContactId;
+   message: text;
+   name: text;
+   respondedAt: opt Timestamp;
+   status: ContactStatus;
+   subject: text;
+   timestamp: Timestamp;
+   userId: opt UserId;
+ };
+type ContactStatus = 
+ variant {
+   Closed;
+   InProgress;
+   Pending;
+   Resolved;
+ };
+type ContactId = text;
+type CanisterId = principal;
+service : {
+  completeMiningRound: (RoundId) -> (Result_6);
+  /// Delete contact submission (admin only)
+  deleteContactSubmission: (ContactId) -> (Result);
+  /// Get all contact submissions (admin only)
+  getAllContactSubmissions: (opt nat, opt ContactStatus) ->
+   (vec ContactSubmission) query;
+  getCallerText: () -> (text);
+  getCanisterIds: () ->
+   (record {
+      consensus: opt CanisterId;
+      imera: opt CanisterId;
+      rewards: opt CanisterId;
+      user: opt CanisterId;
+      validator: opt CanisterId;
+      xp: opt CanisterId;
+    });
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_5);
+  /// Get contact statistics (admin only)
+  getContactStats: () -> (Result_4) query;
+  /// Get contact submission by ID (user can only see their own, admin can see all)
+  getContactSubmission: (ContactId) -> (Result_3) query;
+  getCurrentRound: () -> (opt MiningRound) query;
+  /// Get frontend canister status (bikera_main is a controller, so it can query it)
+  getFrontendCanisterStatus: () -> (Result_2);
+  /// Get complete mining round data in single query
+  /// Replaces: getCurrentRound(), getUserWins(), getTopWinners()
+  /// Result: 1 call instead of 3+ calls (3X reduction)
+  getMiningRoundSnapshot: (UserId) -> (MiningRoundSnapshot) query;
+  /// Get all contact submissions for current user
+  getMyContactSubmissions: () -> (vec ContactSubmission) query;
+  getRound: (RoundId) -> (opt MiningRound) query;
+  getSystemConfig: () -> (SystemConfig) query;
+  /// Get current system statistics
+  /// NOTE: Changed from query to async to allow inter-canister calls
+  getSystemStats: () -> (SystemStats);
+  /// Initialize all canister references for inter-canister communication
+  /// NOTE: Canisters are pre-initialized with production IDs, but this function
+  /// allows updating them if needed (e.g., for testing or migration)
+  /// If null is passed for any canister, uses production ID as default
+  initializeCanisters: (opt CanisterId, opt CanisterId, opt CanisterId,
+   opt CanisterId, opt CanisterId, opt CanisterId) -> (Result);
+  /// Check if automated mining is active
+  isAutomatedMiningActive: () -> (bool) query;
+  /// Reset entire system (admin only)
+  resetSystem: () -> (Result);
+  /// Start automated 5-minute mining rounds
+  startAutomatedMining: () -> (Result);
+  /// Stop automated mining rounds
+  stopAutomatedMining: () -> (Result);
+  /// Submit a contact form (anyone can submit)
+  submitContactForm: (text, text, text, text) -> (Result_1);
+  /// Update contact submission status (admin only)
+  updateContactStatus: (ContactId, ContactStatus, opt text) -> (Result);
+  /// Update system configuration (admin only)
+  updateSystemConfig: (SystemConfig) -> (Result);
+}

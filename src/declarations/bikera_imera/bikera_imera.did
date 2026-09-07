@@ -1,0 +1,329 @@
+type Value = 
+ variant {
+   Blob: blob;
+   Int: int;
+   Nat: nat;
+   Text: text;
+ };
+type TxIndex = nat;
+type TransferFromError = 
+ variant {
+   BadBurn: record {min_burn_amount: Tokens;};
+   BadFee: record {expected_fee: Tokens;};
+   CreatedInFuture: record {ledger_time: Timestamp;};
+   Duplicate: record {duplicate_of: TxIndex;};
+   GenericError: record {
+                   error_code: nat;
+                   message: text;
+                 };
+   InsufficientAllowance: record {allowance: nat;};
+   InsufficientFunds: record {balance: Tokens;};
+   TemporarilyUnavailable;
+   TooOld;
+ };
+type TransferError = 
+ variant {
+   BadBurn: record {min_burn_amount: Tokens;};
+   BadFee: record {expected_fee: Tokens;};
+   CreatedInFuture: record {ledger_time: Timestamp;};
+   Duplicate: record {duplicate_of: TxIndex;};
+   GenericError: record {
+                   error_code: nat;
+                   message: text;
+                 };
+   InsufficientFunds: record {balance: Tokens;};
+   TemporarilyUnavailable;
+   TooOld;
+ };
+type Tokens = nat;
+type Timestamp = nat64;
+type Subaccount = blob;
+type StdResult_2 = 
+ variant {
+   Err: TransferError;
+   Ok: TxIndex;
+ };
+type StdResult_1 = 
+ variant {
+   Err: ApproveError;
+   Ok: TxIndex;
+ };
+type StdResult = 
+ variant {
+   Err: TransferFromError;
+   Ok: TxIndex;
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok: bool;
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      memorySize: nat;
+      totalSupply: Tokens;
+      totalTransactions: nat;
+      uptime: nat64;
+      version: text;
+    };
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type Memo = blob;
+type BikeraIMERA = 
+ service {
+   /// Add authorized minter (admin only)
+   addAuthorizedMinter: (principal) -> (Result);
+   admin_clear_logo: () -> (Result);
+   /// Register as a lock owner (admin only)
+   admin_register_lock_owner: (principal) -> (Result);
+   /// Remove lock owner (admin only)
+   admin_remove_lock_owner: (principal) -> (Result);
+   /// Set foundation fee percentage (admin only)
+   admin_set_foundation_fee_percentage: (nat) -> (Result);
+   /// Set lock owner reward percentage (admin only)
+   admin_set_lock_owner_reward_percentage: (nat) -> (Result);
+   admin_set_logo: (text) -> (Result);
+   /// Update minting account (admin only)
+   admin_set_minting_account: (Account) -> (Result);
+   /// Update token decimals (admin only)
+   admin_set_token_decimals: (nat8) -> (Result);
+   /// Update token name (admin only)
+   admin_set_token_name: (text) -> (Result);
+   /// Update token symbol (admin only)
+   admin_set_token_symbol: (text) -> (Result);
+   /// Set transfer fee (admin only)
+   admin_set_transfer_fee: (nat) -> (Result);
+   /// Burn tokens (authorized minters only)
+   burn: (Account, Tokens) -> (Result);
+   /// Burn tokens for Solana bridge claim (authorized minters only)
+   burnForSolanaClaim: (Account, Tokens) -> (Result);
+   /// Check if user can claim to Solana (50% limit, 30-day cooldown, 50M cap)
+   canClaimToSolana: (principal, Tokens) -> (Result_2) query;
+   /// Check if user can win (anti-gaming rules)
+   canUserWin: (principal) -> (Result_2) query;
+   /// Claim lock owner rewards
+   claimLockOwnerRewards: () -> (Result);
+   /// Clear weekly claim report (admin only)
+   clearWeeklyClaimReport: () -> (Result);
+   /// Distribute lock owner rewards (called by consensus canister)
+   distributeLockOwnerRewards: (Tokens) -> (Result);
+   /// Emergency pause (admin only)
+   emergencyPause: () -> (Result);
+   /// Resume system operations (admin only)
+   emergencyResume: () -> (Result);
+   /// Execute 10M premine for liquidity pool (admin only, one-time)
+   executePremine: (Account) -> (Result);
+   getAccountBalance: (Account) -> (Tokens) query;
+   /// Get Bikera system statistics
+   getBikeraStats: () ->
+    (record {
+       mineableRemaining: Tokens;
+       premineComplete: bool;
+       solanaCapRemaining: Tokens;
+       totalClaimedToSolana: Tokens;
+       totalFoundationEarned: Tokens;
+       totalMined: Tokens;
+       totalSupply: Tokens;
+     }) query;
+   /// Get burn address for Solana claims
+   getBurnAddress: () -> (text) query;
+   /// Get canister status including cycle balance (admin only)
+   getCanisterStatus: () -> (Result_1);
+   /// Get foundation account
+   getFoundationAccount: () -> (opt Account) query;
+   /// Get foundation fee statistics
+   getFoundationFeeStats: () ->
+    (record {
+       currentPercentage: nat;
+       maxPercentage: nat;
+       minPercentage: nat;
+       totalFoundationEarned: Tokens;
+     }) query;
+   /// Get lock owner rewards
+   getLockOwnerRewards: (principal) -> (Tokens) query;
+   /// Get lock owner statistics
+   getLockOwnerStats: () ->
+    (record {
+       currentPercentage: nat;
+       maxPercentage: nat;
+       minPercentage: nat;
+       registeredLockOwners: vec principal;
+       totalLockOwnerRewards: Tokens;
+     }) query;
+   getSolanaClaimBalance: () -> (Tokens);
+   getTotalClaimedToSolana: () -> (Tokens) query;
+   getTotalSupply: () -> (Tokens) query;
+   getTransactionHistory: (opt nat) ->
+    (vec
+      record {
+        amount: Tokens;
+        fee: Tokens;
+        from: Account;
+        memo: opt Memo;
+        timestamp: Timestamp;
+        to: Account;
+      }) query;
+   /// Get user's Bikera-specific stats
+   getUserBikeraStats: (principal) ->
+    (record {
+       consecutiveWins: nat;
+       dailyWins: nat;
+       lastWinTime: opt Timestamp;
+       lifetimeClaimed: Tokens;
+       lifetimeMined: Tokens;
+       remainingClaimable: Tokens;
+     }) query;
+   /// Get user claim statistics
+   getUserClaimStats: (principal) ->
+    (record {
+       cooldownEndsAt: opt Timestamp;
+       globalSolanaRemaining: Tokens;
+       lifetimeClaimed: Tokens;
+       lifetimeMined: Tokens;
+       remainingClaimable: Tokens;
+     }) query;
+   /// Get weekly claim report for manual Solana distribution
+   getWeeklyClaimReport: () ->
+    (vec record {
+           principal;
+           Account;
+           text;
+           Tokens;
+         }) query;
+   /// Get current foundation fee percentage
+   get_foundation_fee_percentage: () -> (nat) query;
+   get_minting_account: () -> (Account) query;
+   /// Get current transfer fee
+   get_transfer_fee: () -> (nat) query;
+   icrc1_balance_of: (Account) -> (Tokens) query;
+   icrc1_decimals: () -> (nat8) query;
+   icrc1_fee: () -> (nat) query;
+   icrc1_logo: () -> (opt text) query;
+   icrc1_metadata: () -> (vec record {
+                                text;
+                                Value;
+                              }) query;
+   icrc1_minting_account: () -> (opt Account) query;
+   icrc1_name: () -> (text) query;
+   icrc1_supported_standards: () ->
+    (vec record {
+           name: text;
+           url: text;
+         }) query;
+   icrc1_symbol: () -> (text) query;
+   icrc1_total_supply: () -> (Tokens) query;
+   icrc1_transfer:
+    (record {
+       amount: Tokens;
+       created_at_time: opt Timestamp;
+       fee: opt Tokens;
+       from_subaccount: opt Subaccount;
+       memo: opt Memo;
+       to: Account;
+     }) -> (StdResult_2);
+   icrc2_allowance: (record {
+                       account: Account;
+                       spender: Account;
+                     }) -> (Allowance) query;
+   icrc2_approve:
+    (record {
+       amount: nat;
+       created_at_time: opt Timestamp;
+       expected_allowance: opt nat;
+       expires_at: opt nat64;
+       fee: opt Tokens;
+       from_subaccount: opt Subaccount;
+       memo: opt Memo;
+       spender: Account;
+     }) -> (StdResult_1);
+   icrc2_transfer_from:
+    (record {
+       amount: Tokens;
+       created_at_time: opt Timestamp;
+       fee: opt Tokens;
+       from: Account;
+       memo: opt Memo;
+       spender_subaccount: opt Subaccount;
+       to: Account;
+     }) -> (StdResult);
+   /// Initialize the canister with authorized minters
+   initialize: (vec principal) -> (Result);
+   /// Initialize admin principal (one-time setup)
+   initializeAdmin: (principal) -> (Result);
+   /// Check if principal is a registered lock owner
+   isLockOwner: (principal) -> (bool) query;
+   isPremined: () -> (bool) query;
+   /// Check if system is paused
+   isSystemPaused: () -> (bool) query;
+   is_authorized_minter: (principal) -> (bool) query;
+   /// Mint new tokens (authorized minters only)
+   mint: (Account, Tokens) -> (Result);
+   /// Record claim to Solana (called by Bridge canister)
+   recordSolanaClaim: (principal, Tokens) -> (Result);
+   /// Record a win for a user (called by consensus canister)
+   recordWin: (principal, Tokens, opt text) -> (Result);
+   /// Remove authorized minter (admin only)
+   removeAuthorizedMinter: (principal) -> (Result);
+   /// Reset consecutive wins (called when user doesn't win)
+   resetConsecutiveWins: (principal) -> (Result);
+   setArchiveCanister: (principal) -> ();
+   /// Set foundation account (admin only)
+   setFoundationAccount: (Account) -> (Result);
+ };
+type ApproveError = 
+ variant {
+   AllowanceChanged: record {current_allowance: nat;};
+   BadFee: record {expected_fee: Tokens;};
+   CreatedInFuture: record {ledger_time: Timestamp;};
+   Duplicate: record {duplicate_of: TxIndex;};
+   Expired: record {ledger_time: nat64;};
+   GenericError: record {
+                   error_code: nat;
+                   message: text;
+                 };
+   InsufficientFunds: record {balance: Tokens;};
+   TemporarilyUnavailable;
+   TooOld;
+ };
+type Allowance = 
+ record {
+   allowance: nat;
+   expires_at: opt nat64;
+ };
+type Account = 
+ record {
+   owner: principal;
+   subaccount: opt Subaccount;
+ };
+/// iMERA token canister implementing official ICRC-1 and ICRC-2 standards
+service : (record {
+             admin_principal: principal;
+             authorized_minters: vec principal;
+             decimals: nat8;
+             initial_mints:
+              vec
+               record {
+                 account: record {
+                            owner: principal;
+                            subaccount: opt blob;
+                          };
+                 amount: nat;
+               };
+             minting_account: record {
+                                owner: principal;
+                                subaccount: opt blob;
+                              };
+             token_name: text;
+             token_symbol: text;
+             transfer_fee: nat;
+           }) -> BikeraIMERA

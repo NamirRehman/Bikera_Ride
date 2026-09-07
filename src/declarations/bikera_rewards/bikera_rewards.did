@@ -1,0 +1,296 @@
+type UserReward = 
+ record {
+   amount: TokenAmount;
+   claimedAt: opt Timestamp;
+   isClaimed: bool;
+   reason: RewardReason;
+   roundId: opt RoundId;
+   timestamp: Timestamp;
+   userId: UserId;
+ };
+type UserId = principal;
+type TokenAmount = nat;
+type Timestamp = int;
+type StakingInfo = 
+ record {
+   amount: TokenAmount;
+   isActive: bool;
+   rewardsEarned: TokenAmount;
+   stakedAt: Timestamp;
+   unlockTime: Timestamp;
+   userId: UserId;
+ };
+type RoundId = nat;
+type RewardsSnapshot = 
+ record {
+   goalStakingSummary:
+    record {
+      activePositions: nat;
+      pendingRewards: TokenAmount;
+      totalStaked: TokenAmount;
+    };
+   pendingRewards: TokenAmount;
+   recentRewards: vec UserReward;
+   stakingInfo: vec StakingInfo;
+   totalRewards: TokenAmount;
+ };
+type RewardReason = 
+ variant {
+   Achievement: text;
+   Bonus: text;
+   Distance: Distance;
+   GoalStaking: nat;
+   Mining: RoundId;
+   Referral: UserId;
+   Staking: TokenAmount;
+ };
+type RewardDistribution = 
+ record {
+   distributedAt: Timestamp;
+   foundationShare: TokenAmount;
+   isCompleted: bool;
+   roundId: RoundId;
+   totalReward: TokenAmount;
+   userRewards: vec record {
+                      UserId;
+                      TokenAmount;
+                    };
+ };
+type RewardConfig = 
+ record {
+   achievementBonus: TokenAmount;
+   distanceRewardRate: nat;
+   foundationSharePercentage: nat;
+   minStakingAmount: TokenAmount;
+   miningRewardPerRound: TokenAmount;
+   referralBonus: TokenAmount;
+   stakingLockPeriod: nat;
+   stakingRewardRate: nat;
+ };
+type Result_5 = 
+ variant {
+   err: text;
+   ok: GoalStakingSnapshot;
+ };
+type Result_4 = 
+ variant {
+   err: text;
+   ok: TokenAmount;
+ };
+type Result_3 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canisterId: text;
+      canisterName: text;
+      cycles: nat;
+      isPaused: bool;
+      memorySize: nat;
+      pendingGoalRewards: TokenAmount;
+      totalRewards: nat;
+      totalStaked: nat;
+      uptime: Timestamp;
+      version: text;
+    };
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      canStake: bool;
+      holdings: TokenAmount;
+      holdingsE8s: nat;
+      meetsHoldingsRequirement: bool;
+      minHoldings: TokenAmount;
+      minStakeAmount: TokenAmount;
+    };
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: GoalStakePosition;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type GoalStakingSnapshotStatus = 
+ variant {
+   Distributed;
+   PendingDistribution;
+ };
+type GoalStakingSnapshot = 
+ record {
+   allocations: vec record {
+                      UserId;
+                      TokenAmount;
+                    };
+   createdAt: Timestamp;
+   id: nat;
+   periodEnd: Timestamp;
+   periodStart: Timestamp;
+   rewardAmount: TokenAmount;
+   status: GoalStakingSnapshotStatus;
+   totalEligibleStake: TokenAmount;
+ };
+type GoalStakingConfig = 
+ record {
+   lockPeriod: nat;
+   minHoldings: TokenAmount;
+   minStakeAmount: TokenAmount;
+   roundRewardShare: nat;
+ };
+type GoalStakeStatus = 
+ variant {
+   Active;
+   Closed;
+   PendingUnstake;
+ };
+type GoalStakePosition = 
+ record {
+   accumulatedRewards: TokenAmount;
+   amount: TokenAmount;
+   amountE8s: nat;
+   id: GoalStakeId;
+   lastSnapshotId: opt nat;
+   stakedAt: Timestamp;
+   status: GoalStakeStatus;
+   unlockAt: Timestamp;
+   userId: UserId;
+ };
+type GoalStakeId = nat;
+type Distance = nat;
+type ClaimRequest = 
+ record {
+   amount: TokenAmount;
+   processedAt: opt Timestamp;
+   reason: RewardReason;
+   status: text;
+   timestamp: Timestamp;
+   userId: UserId;
+ };
+type CanisterId = principal;
+service : {
+  calculateGoalStakingRewards: (Timestamp, Timestamp) -> (Result_5);
+  /// Claim a specific reward by index
+  /// NOTE: Tokens are already minted to user's account during distributeMiningRewards
+  /// This function just marks the reward as claimed for UI purposes
+  claimReward: (nat, UserId) -> (Result);
+  /// Clear old data (admin only)
+  clearOldData: () -> (Result);
+  distributeAchievementReward: (UserId, text) -> (Result);
+  distributeDistanceReward: (UserId, Distance) -> (Result_4);
+  distributeGoalStakingRewards: (nat) -> (Result);
+  /// Distribute mining rewards to winners
+  distributeMiningRewards: (RoundId, vec UserId, TokenAmount) -> (Result);
+  distributeReferralReward: (UserId, UserId) -> (Result);
+  /// Emergency pause (admin only)
+  emergencyPause: () -> (Result);
+  /// Resume system operations (admin only)
+  emergencyResume: () -> (Result);
+  getActiveStaking: (UserId, opt nat) -> (vec StakingInfo) query;
+  /// Get all rewards for all users (admin only) - for debugging
+  getAllRewards: () -> (vec record {
+                              UserId;
+                              vec UserReward;
+                            }) query;
+  /// Return a capped subset of rewards (admin-only use-case).
+  /// This avoids instruction-limit failures and huge responses when the dataset grows.
+  /// 
+  /// - `usersLimit`: max number of users to return (default 200, max 1000)
+  /// - `rewardsPerUserLimit`: max rewards per user (most recent) (default 50, max 200)
+  getAllRewardsCapped: (opt nat, opt nat) ->
+   (vec record {
+          UserId;
+          vec UserReward;
+        }) query;
+  /// Get canister status including cycle balance (admin only)
+  getCanisterStatus: () -> (Result_3);
+  getClaimRequest: (text) -> (opt ClaimRequest) query;
+  getGoalSnapshot: (nat) -> (opt GoalStakingSnapshot) query;
+  getGoalStakePositions: (UserId, opt nat) -> (vec GoalStakePosition) query;
+  getGoalStakingConfig: () -> (GoalStakingConfig) query;
+  getGoalStakingEligibility: (UserId) -> (Result_2);
+  getGoalStakingMetrics: () ->
+   (record {
+      automatedSystemActive: bool;
+      pendingSnapshots: nat;
+      totalActiveStakeAmount: TokenAmount;
+      totalActiveStakes: nat;
+      totalDistributedRewards: TokenAmount;
+      totalPendingRewards: TokenAmount;
+      totalSnapshots: nat;
+    }) query;
+  getGoalStakingSummary: (UserId) ->
+   (record {
+      accumulatedRewards: TokenAmount;
+      config: GoalStakingConfig;
+      pendingDistributionPool: TokenAmount;
+      positions: vec GoalStakePosition;
+      totalActiveStake: TokenAmount;
+    }) query;
+  getPendingClaimRequests: () -> (vec record {
+                                        text;
+                                        ClaimRequest;
+                                      }) query;
+  /// Get pending snapshots that need distribution (admin only)
+  getPendingGoalSnapshots: () -> (vec GoalStakingSnapshot) query;
+  getRewardConfig: () -> (RewardConfig) query;
+  getRewardDistribution: (RoundId) -> (opt RewardDistribution) query;
+  /// Get all rewards for a specific round (admin only)
+  getRewardsByRound: (RoundId) -> (vec record {
+                                         UserId;
+                                         UserReward;
+                                       }) query;
+  /// Get complete rewards data in single query
+  /// Replaces: getUserRewards(), getUnclaimedRewards(), getStakingInfo(), getGoalStakingSummary()
+  /// Result: 1 call instead of 4+ calls (4X reduction)
+  getRewardsSnapshot: (UserId) -> (RewardsSnapshot) query;
+  /// Get summary of all rewards (total count, total amount, by user, etc.) - admin only
+  getRewardsSummary: () ->
+   (record {
+      rewardsByUser: vec record {
+                           UserId;
+                           nat;
+                           TokenAmount;
+                         };
+      totalAmount: TokenAmount;
+      totalRewards: nat;
+      totalUsers: nat;
+      unclaimedAmount: TokenAmount;
+    }) query;
+  getStakingInfo: (UserId, opt nat) -> (vec StakingInfo) query;
+  getTotalDistributed: () -> (TokenAmount) query;
+  getTotalStaked: () -> (TokenAmount) query;
+  getTotalUnclaimedRewards: (UserId) -> (TokenAmount) query;
+  getUnclaimedRewards: (UserId, opt nat) -> (vec UserReward) query;
+  getUserRewards: (UserId, opt nat) -> (vec UserReward) query;
+  /// Check if automated GoalStaking reward system is active
+  isAutomatedGoalStakingActive: () -> (bool) query;
+  /// Check if system is paused
+  isSystemPaused: () -> (bool) query;
+  listGoalSnapshots: (opt nat) -> (vec GoalStakingSnapshot) query;
+  processClaimRequest: (text, bool) -> (Result);
+  /// Set canister references (admin only)
+  /// NOTE: Canisters are pre-initialized with production IDs, but this function
+  /// allows updating them if needed (e.g., for testing or migration)
+  setCanisterReferences: (CanisterId, CanisterId, CanisterId) -> (Result);
+  stakeGoalTokens: (TokenAmount) -> (Result_1);
+  /// Legacy staking API retained for backwards compatibility
+  stakeTokens: (TokenAmount, UserId) -> (Result);
+  /// Start automated GoalStaking reward calculation and distribution
+  /// Runs daily to calculate and distribute rewards from pending pool
+  startAutomatedGoalStakingRewards: () -> (Result);
+  /// Stop automated GoalStaking reward system
+  stopAutomatedGoalStakingRewards: () -> (Result);
+  /// Test function to manually add a reward (for debugging)
+  testAddReward: (UserId, TokenAmount, opt RoundId) -> (Result);
+  unstakeGoalTokens: (GoalStakeId) -> (Result_1);
+  unstakeTokens: (nat, UserId) -> (Result);
+  updateGoalStakingConfig: (GoalStakingConfig) -> (Result);
+  /// Update reward configuration (admin only)
+  updateRewardConfig: (RewardConfig) -> (Result);
+}
