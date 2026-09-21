@@ -1,16 +1,16 @@
 import React, { memo } from 'react';
 import { View, StyleSheet, type ColorValue } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors, gradients, overlays, radii } from '../theme/tokens';
+import { colors, gradients } from '../theme/tokens';
 
 export const BikeraBackground = memo(function BikeraBackground() {
   return (
-    <View style={{ position: 'absolute', inset: 0 }}>
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
       <LinearGradient
         colors={[...gradients.background] as [ColorValue, ColorValue, ...ColorValue[]]}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={{ flex: 1 }}
+        style={StyleSheet.absoluteFill}
       />
       {/* soft brand glow top-right - more subtle */}
       <View

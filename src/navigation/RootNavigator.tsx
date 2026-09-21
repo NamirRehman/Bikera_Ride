@@ -12,10 +12,8 @@ const getPublicProfileScreen = () => require('../screens/PublicProfileScreen').P
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
-  const { isAuthenticated, isRegistered, checkingProfile } = useAuth();
-  void checkingProfile;
-
-  const canAccessApp = isAuthenticated && isRegistered === true;
+  const { isAuthenticated, isRegistered, isGuest } = useAuth();
+  const canAccessApp = (isAuthenticated && isRegistered === true) || isGuest;
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>

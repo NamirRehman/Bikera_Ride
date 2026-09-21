@@ -1,52 +1,95 @@
 import React from 'react';
-import { Pressable, Text, View, StyleSheet, type ColorValue } from 'react-native';
+import { Pressable, Text, View, StyleSheet, Image, type ColorValue } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, radii, shadows, gradients } from '../theme/tokens';
 import { ThreeDotLoader } from './ThreeDotLoader';
 
-export function ConnectIIButton() {
-  const { login, isAuthenticated, checkingAuth } = useAuth();
-  const [isLoggingIn, setIsLoggingIn] = React.useState(false);
+let icpLogo: number | null = null;
+try {
+  icpLogo = require('../../assets/icp-logo.png');
+} catch {
+  icpLogo = null;
+}
+
+export function ConnectIIButton({ variant = 'menu' }: { variant?: 'menu' | 'hero' }) {
+  const { login, isAuthenticated, isLoggingIn } = useAuth();
+  const [pending, setPending] = React.useState(false);
 
   if (isAuthenticated) {
-    return null; // Don't show button if already authenticated
+    return null;
   }
 
   const handleLogin = async () => {
-    setIsLoggingIn(true);
+    setPending(true);
     try {
       await login();
     } catch (error) {
       console.error('[ConnectIIButton] Login error:', error);
     } finally {
-      // Don't set to false immediately - let checkingAuth handle it
-      // This ensures the button stays in loading state during the entire process
+      setPending(false);
     }
   };
 
-  const isLoading = checkingAuth || isLoggingIn;
+  const isLoading = isLoggingIn || pending;
+  const label = isLoading ? 'Opening Internet Identity…' : 'Sign in with Internet Identity';
+
+  const logo = icpLogo ? (
+    <Image source={icpLogo} style={styles.logo} accessibilityLabel="ICP logo" />
+  ) : (
+    <Text style={styles.logoFallback}>∞</Text>
+  );
+
+  if (variant === 'hero') {
+    return (
+      <Pressable
+        onPress={handleLogin}
+        disabled={isLoading}
+        style={({ pressed }) => [styles.heroWrap, isLoading && styles.disabled, pressed && !isLoading && styles.pressed]}
+        accessibilityRole="button"
+        accessibilityLabel="Sign in with Internet Identity"
+        accessibilityHint="Opens Internet Identity. Use your passkey or security device, then return to Bikera."
+      >
+        <LinearGradient
+          colors={[...gradients.button] as [ColorValue, ColorValue, ...ColorValue[]]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.heroButton}
+        >
+          {isLoading ? (
+            <ThreeDotLoader color="#FFFFFF" size="small" />
+          ) : (
+            <View style={styles.heroLogo}>{logo}</View>
+          )}
+          <Text style={styles.heroText}>{label}</Text>
+        </LinearGradient>
+      </Pressable>
+    );
+  }
 
   return (
     <Pressable
       onPress={handleLogin}
       disabled={isLoading}
-      style={[styles.container, isLoading && styles.containerDisabled]}
+      style={[styles.menuWrap, isLoading && styles.disabled]}
+      accessibilityRole="button"
+      accessibilityLabel="Sign in with Internet Identity"
     >
       <LinearGradient
         colors={[...gradients.button] as [ColorValue, ColorValue, ...ColorValue[]]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.gradient}
+        style={styles.menuButton}
       >
         {isLoading ? (
-          <View style={styles.loadingContainer}>
+          <View style={styles.menuRow}>
             <ThreeDotLoader color="white" size="small" />
-            <Text style={styles.text}>Connecting...</Text>
+            <Text style={styles.menuText}>Connecting...</Text>
           </View>
         ) : (
-          <View style={styles.contentContainer}>
-            <Text style={styles.text}>Connect Internet Identity</Text>
+          <View style={styles.menuRow}>
+            <View style={styles.menuLogo}>{logo}</View>
+            <Text style={styles.menuText}>{label}</Text>
           </View>
         )}
       </LinearGradient>
@@ -55,34 +98,78 @@ export function ConnectIIButton() {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  heroWrap: {
     width: '100%',
     maxWidth: 320,
   },
-  containerDisabled: {
-    opacity: 0.7,
+  heroButton: {
+    minHeight: 56,
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  gradient: {
+  heroLogo: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  heroText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  menuWrap: {
+    width: '100%',
+  },
+  menuButton: {
     borderRadius: radii.xl,
     paddingVertical: 16,
     paddingHorizontal: 24,
     ...shadows.soft,
   },
-  loadingContainer: {
+  menuRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 10,
   },
-  contentContainer: {
+  menuLogo: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  text: {
+  menuText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '700',
     textAlign: 'center',
   },
+  logo: {
+    width: 28,
+    height: 28,
+  },
+  logoFallback: {
+    color: colors.brandPurple,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  disabled: {
+    opacity: 0.7,
+  },
+  pressed: {
+    opacity: 0.88,
+  },
 });
-

@@ -1,5 +1,5 @@
 // Cache helper utilities for invalidating related caches
-// Use these after mutations to keep UI in sync
+// Call these after mutations so focused screens refetch immediately
 
 import { dataCache } from '../services/dataCache';
 
@@ -13,18 +13,21 @@ export async function invalidateUserCaches(principal?: string): Promise<void> {
     'profile',
     'stats',
     'history',
+    'wallet',
+    'friends',
     'staking',
   ];
 
-  await Promise.all(
-    cachesToInvalidate.map(type => 
-      principal 
-        ? dataCache.invalidate(type, principal)
-        : dataCache.invalidateType(type)
-    )
-  );
+  await Promise.all([
+    ...cachesToInvalidate.map((type) =>
+      principal ? dataCache.invalidate(type, principal) : dataCache.invalidateType(type)
+    ),
+    dataCache.invalidateType('leaderboard'),
+    dataCache.invalidateType('userPublic'),
+    dataCache.invalidateType('publicProfile'),
+  ]);
 
-  console.log('[CACHE] Invalidated user caches');
+  if (__DEV__) console.log('[CACHE] Invalidated user caches');
 }
 
 /**
@@ -33,7 +36,7 @@ export async function invalidateUserCaches(principal?: string): Promise<void> {
  */
 export async function invalidateDashboardCache(principal?: string): Promise<void> {
   await dataCache.invalidate('dashboard', principal);
-  console.log('[CACHE] Invalidated dashboard cache');
+  if (__DEV__) console.log('[CACHE] Invalidated dashboard cache');
 }
 
 /**
@@ -42,8 +45,8 @@ export async function invalidateDashboardCache(principal?: string): Promise<void
  */
 export async function invalidateProfileCache(principal?: string): Promise<void> {
   await dataCache.invalidate('profile', principal);
-  await dataCache.invalidate('dashboard', principal); // Dashboard also shows profile data
-  console.log('[CACHE] Invalidated profile cache');
+  await dataCache.invalidate('dashboard', principal);
+  if (__DEV__) console.log('[CACHE] Invalidated profile cache');
 }
 
 /**
@@ -52,8 +55,9 @@ export async function invalidateProfileCache(principal?: string): Promise<void> 
  */
 export async function invalidateStakingCache(principal?: string): Promise<void> {
   await dataCache.invalidate('staking', principal);
-  await dataCache.invalidate('dashboard', principal); // Dashboard shows balance
-  console.log('[CACHE] Invalidated staking cache');
+  await dataCache.invalidate('dashboard', principal);
+  await dataCache.invalidate('wallet', principal);
+  if (__DEV__) console.log('[CACHE] Invalidated staking cache');
 }
 
 /**
@@ -62,7 +66,7 @@ export async function invalidateStakingCache(principal?: string): Promise<void> 
  */
 export async function invalidateGroupsCache(): Promise<void> {
   await dataCache.invalidateType('groups');
-  console.log('[CACHE] Invalidated groups cache');
+  if (__DEV__) console.log('[CACHE] Invalidated groups cache');
 }
 
 /**
@@ -71,6 +75,5 @@ export async function invalidateGroupsCache(): Promise<void> {
  */
 export async function invalidateFriendsCache(principal?: string): Promise<void> {
   await dataCache.invalidate('friends', principal);
-  console.log('[CACHE] Invalidated friends cache');
+  if (__DEV__) console.log('[CACHE] Invalidated friends cache');
 }
-

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, FlatList, Platform, Pressable, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,6 +14,7 @@ import { colors } from '../theme/tokens';
 import { useCachedData } from '../hooks/useCachedData';
 import { getBikeraImeraActor, getBikeraRewardsActor, getHost } from '../utils/actors';
 import { WEB_APP_URL } from '../config';
+import { GuestBanner } from '../components/GuestBanner';
 
 const TOKEN_DECIMALS = 8;
 const TOKEN_DECIMALS_MULTIPLIER = BigInt(10 ** TOKEN_DECIMALS);
@@ -88,7 +89,6 @@ interface WalletScreenProps {
 export function WalletScreen({ embedded = false }: WalletScreenProps) {
   const { principal, getIdentity } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   const fetchWalletData = useCallback(async () => {
     if (!principal) return null;
@@ -111,10 +111,25 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
     const principalObj = Principal.fromText(principal);
     const account = { owner: principalObj, subaccount: [] as [] };
     const imeraActor = getBikeraImeraActor({ agent });
-    const balance = await imeraActor.icrc1_balance_of(account).catch(() => 0n);
+    const rewardsActor = getBikeraRewardsActor({}, identity);
+    const [balance, rewardsSnapshot] = await Promise.all([
+      imeraActor.icrc1_balance_of(account).catch(() => 0n),
+      (rewardsActor as any).getRewardsSnapshot?.(principalObj).catch(() => null),
+    ]);
+
+    const recentRewards = Array.isArray(rewardsSnapshot?.recentRewards) ? rewardsSnapshot.recentRewards : [];
+    const transactions: Transaction[] = recentRewards
+      .map((reward: any, index: number) => ({
+        id: `reward-${index}-${reward.roundId ?? index}`,
+        amount: Number(reward.amount || 0) / Number(TOKEN_DECIMALS_MULTIPLIER),
+        timestamp: Number(reward.timestamp || 0) / 1_000_000 || Date.now(),
+      }))
+      .sort((a: Transaction, b: Transaction) => b.timestamp - a.timestamp)
+      .slice(0, 100);
 
     return {
       balance: Number(balance) / Number(TOKEN_DECIMALS_MULTIPLIER),
+      transactions,
     };
   }, [principal, getIdentity]);
 
@@ -123,51 +138,23 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
     identifier: principal || undefined,
     fetcher: fetchWalletData,
     enabled: !!principal,
-    customTtl: 30 * 1000,
   });
-
-  const loadTransactions = useCallback(async () => {
-    if (!principal) return;
-
-    const identity = getIdentity();
-    if (!identity) return;
-
-    try {
-      const principalObj = Principal.fromText(principal);
-      const rewardsActor = getBikeraRewardsActor({}, identity);
-      const rewardsSnapshot = await (rewardsActor as any).getRewardsSnapshot?.(principalObj).catch(() => null);
-      const recentRewards = Array.isArray(rewardsSnapshot?.recentRewards) ? rewardsSnapshot.recentRewards : [];
-      const rewardItems = recentRewards.map((reward: any, index: number) => ({
-        id: `reward-${index}-${reward.roundId ?? index}`,
-        amount: Number(reward.amount || 0n) / Number(TOKEN_DECIMALS_MULTIPLIER),
-        timestamp: Number(reward.timestamp || 0n) / 1_000_000 || Date.now(),
-      }));
-
-      rewardItems.sort((a, b) => b.timestamp - a.timestamp);
-      setTransactions(rewardItems.slice(0, 100));
-    } catch (err) {
-      if (__DEV__) {
-        console.error('[Wallet] Failed to load rewards activity:', err);
-      }
-    }
-  }, [principal, getIdentity]);
-
-  useEffect(() => {
-    if (!principal) return;
-    loadTransactions();
-  }, [principal, loadTransactions]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refetch(), loadTransactions()]);
+    await refetch();
     setRefreshing(false);
-  }, [refetch, loadTransactions]);
+  }, [refetch]);
 
   const balance = walletData?.balance || 0;
+  const transactions = walletData?.transactions || [];
 
   const content = (
     <>
       {!embedded && <SectionHeader title="Wallet" subtitle="View your iMERA balance and reward activity" />}
+      {!embedded ? (
+        <GuestBanner compact message="Balances stay at zero until you sign in from More. You can still open this screen and Bikera Web." />
+      ) : null}
       <ScrollView
         style={styles.container}
         refreshControl={

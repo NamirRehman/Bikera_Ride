@@ -12,6 +12,8 @@ import { createActor as createBikeraPoolsActor } from "../declarations/bikera_po
 
 // Import CreateActorOptions type for proper typing
 import type { CreateActorOptions } from "../declarations/bikera_main";
+import { HttpAgent } from '@dfinity/agent';
+import { Principal } from '@dfinity/principal';
 
 // Detect if we're in development mode
 // In React Native, __DEV__ is true in development builds
@@ -213,19 +215,11 @@ export function getActor(canisterName: CanisterName, options: CreateActorOptions
 export const isLocalDevelopment = false;
 export const currentHost = getHost();
 
-// ===== SHADOW WORKER INTEGRATION (Phase 2) =====
-import { ShadowWorkerClient } from '../services/shadowWorkerClient';
-import { HttpAgent } from '@dfinity/agent';
-import { Principal } from '@dfinity/principal';
+let shadowClient: any = null;
 
-// Singleton shadow client
-let shadowClient: ShadowWorkerClient | null = null;
-
-/**
- * Get shadow worker client instance
- */
-export const getShadowClient = (agent: HttpAgent): ShadowWorkerClient => {
+export const getShadowClient = (agent: HttpAgent) => {
   if (!shadowClient) {
+    const { ShadowWorkerClient } = require('../services/shadowWorkerClient');
     shadowClient = new ShadowWorkerClient(agent);
   }
   return shadowClient;

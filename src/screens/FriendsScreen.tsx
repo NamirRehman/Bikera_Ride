@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Pressable, Text, View, StyleSheet, TextInput, Alert, FlatList, Platform, ListRenderItem } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraUserActor } from '../utils/actors';
 import { ThreeDotLoader } from '../components/ThreeDotLoader';
+import { GuestBanner } from '../components/GuestBanner';
 import { useCachedData } from '../hooks/useCachedData';
 import { invalidateFriendsCache } from '../utils/cacheHelpers';
 import { fetchPublicUserSummary, type PublicUserSummary } from '../services/userSummary';
@@ -49,7 +50,7 @@ interface FriendRequestRaw {
 
 export function FriendsScreen() {
   const navigation = useNavigation<any>();
-  const { principal } = useAuth();
+  const { principal, isGuest } = useAuth();
   const [tab, setTab] = useState<Tab>('friends');
   const [searchText, setSearchText] = useState('');
   const [friendIds, setFriendIds] = useState<string[]>([]);
@@ -115,7 +116,7 @@ export function FriendsScreen() {
       setLoading(false);
       setVisibleFriendCount(FRIEND_PAGE_SIZE);
       setVisibleRequestCount(REQUEST_PAGE_SIZE);
-    } else if (!friendsLoading && principal) {
+    } else if (!friendsLoading) {
       setLoading(false);
     }
   }, [friendsData, friendsLoading, principal]);
@@ -130,8 +131,11 @@ export function FriendsScreen() {
     setVisibleRequestCount(REQUEST_PAGE_SIZE);
   }, [principal]);
 
+  const summariesRef = useRef(summaries);
+  summariesRef.current = summaries;
+
   const loadSummaries = useCallback(async (ids: string[]) => {
-    const missing = ids.filter((id) => !summaries[id]);
+    const missing = ids.filter((id) => !summariesRef.current[id]);
     if (missing.length === 0) return;
     const results = await runInBatches(missing, SUMMARY_BATCH_SIZE, (id) => fetchPublicUserSummary(id));
     const updates: Record<string, PublicUserSummary> = {};
@@ -139,7 +143,7 @@ export function FriendsScreen() {
       updates[id] = results[index];
     });
     setSummaries((prev) => ({ ...prev, ...updates }));
-  }, [summaries]);
+  }, []);
 
   useEffect(() => {
     const ids = tab === 'friends'
@@ -150,10 +154,20 @@ export function FriendsScreen() {
     }
   }, [tab, friendIds, requestItems, visibleFriendCount, visibleRequestCount, loadSummaries]);
 
+  const requireAccount = () => {
+    Alert.alert(
+      'Sign in to continue',
+      'Friend requests need an account. Open More and tap Sign in with Internet Identity, or keep using the other tabs.',
+    );
+  };
+
   const handleAcceptRequest = async (requestId: string) => {
     try {
       const storedPrincipal = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
-      if (!storedPrincipal) return;
+      if (!storedPrincipal) {
+        requireAccount();
+        return;
+      }
       setActionBusy((prev) => ({ ...prev, [requestId]: true }));
       const userActor = getBikeraUserActor();
       const p = Principal.fromText(storedPrincipal);
@@ -176,7 +190,10 @@ export function FriendsScreen() {
   const handleRejectRequest = async (requestId: string) => {
     try {
       const storedPrincipal = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
-      if (!storedPrincipal) return;
+      if (!storedPrincipal) {
+        requireAccount();
+        return;
+      }
       setActionBusy((prev) => ({ ...prev, [requestId]: true }));
       const userActor = getBikeraUserActor();
       const p = Principal.fromText(storedPrincipal);
@@ -201,7 +218,10 @@ export function FriendsScreen() {
     
     try {
       const storedPrincipal = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
-      if (!storedPrincipal) return;
+      if (!storedPrincipal) {
+        requireAccount();
+        return;
+      }
       setSending(true);
       const userActor = getBikeraUserActor();
       const p = Principal.fromText(storedPrincipal);
@@ -394,6 +414,7 @@ export function FriendsScreen() {
   const listHeader = (
     <View style={styles.listHeader}>
       <SectionHeader title="Friends" subtitle="Connect with other riders" />
+      <GuestBanner compact message="You can browse this screen. Sending or accepting friend requests needs a signed-in account from More." />
 
       <View style={styles.tabContainer}>
         <Pressable
@@ -473,7 +494,7 @@ export function FriendsScreen() {
   );
 
   return (
-    <Screen scroll={false} contentClassName={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
       <FlatList<Friend | FriendRequest>
         key={tab}
         data={listData}
@@ -491,8 +512,10 @@ export function FriendsScreen() {
             </View>
           ) : tab === 'friends' ? (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No friends found</Text>
-              <Text style={styles.emptySubtext}>Search for riders to connect with</Text>
+              <Text style={styles.emptyText}>{isGuest ? 'Explore as guest' : 'No friends found'}</Text>
+              <Text style={styles.emptySubtext}>
+                {isGuest ? 'Sign in from More to add friends, or keep using Home and Track.' : 'Search for riders to connect with'}
+              </Text>
             </View>
           ) : (
             <View style={styles.emptyContainer}>

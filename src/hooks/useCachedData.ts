@@ -1,9 +1,11 @@
 // React hook for fetching data with caching
-// Implements stale-while-revalidate pattern; deduplicates in-flight requests for same key
+// Stale-while-revalidate for instant paint, then live refresh on mutation / focus / foreground
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { dataCache } from '../services/dataCache';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { dataCache, type CacheChangeEvent } from '../services/dataCache';
 import { requestDeduplicator } from '../services/requestDeduplicator';
+import { appStateManager } from '../services/appStateManager';
 
 interface UseCachedDataOptions<T> {
   type: string;
@@ -14,6 +16,8 @@ interface UseCachedDataOptions<T> {
   onError?: (error: Error) => void;
   skipCache?: boolean;
   customTtl?: number;
+  refetchOnFocus?: boolean;
+  refetchOnForeground?: boolean;
 }
 
 interface UseCachedDataResult<T> {
@@ -28,10 +32,24 @@ function cacheKey(type: string, identifier?: string): string {
   return identifier ? `${type}:${identifier}` : type;
 }
 
+function eventMatchesHook(event: CacheChangeEvent, type: string, identifier?: string): boolean {
+  if (event.kind === 'clear') return true;
+  if (event.kind === 'invalidateType') return event.type === type;
+  if (event.kind === 'invalidate') {
+    if (event.type !== type) return false;
+    if (!event.identifier || !identifier) return true;
+    return identifier === event.identifier || identifier.startsWith(`${event.identifier}:`);
+  }
+  return false;
+}
+
 /**
- * Hook for fetching data with automatic caching
- * Returns cached data immediately if available, then refreshes in background if stale.
- * Deduplicates in-flight requests so multiple components sharing the same key reuse one call.
+ * Hook for fetching data with automatic caching.
+ * Shows cached data immediately, then refreshes when:
+ * - cached data is stale
+ * - this cache entry is invalidated after a mutation
+ * - the screen is focused again
+ * - the app returns to the foreground while this screen is visible
  */
 export function useCachedData<T>({
   type,
@@ -42,16 +60,22 @@ export function useCachedData<T>({
   onError,
   skipCache = false,
   customTtl,
+  refetchOnFocus = true,
+  refetchOnForeground = true,
 }: UseCachedDataOptions<T>): UseCachedDataResult<T> {
   const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<Error | null>(null);
   const mountedRef = useRef(true);
+  const dataRef = useRef<T | null>(null);
   const onSuccessRef = useRef(onSuccess);
   const onErrorRef = useRef(onError);
+  const isFocused = useIsFocused();
+  const isFocusedRef = useRef(isFocused);
 
   onSuccessRef.current = onSuccess;
   onErrorRef.current = onError;
+  isFocusedRef.current = isFocused;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -66,17 +90,16 @@ export function useCachedData<T>({
     const key = cacheKey(type, identifier);
 
     try {
-      // Try to get from cache first (unless forcing refresh or skipping cache)
       if (!forceRefresh && !skipCache) {
         const cached = await dataCache.get<T>(type, identifier);
         if (cached.data !== null) {
           if (mountedRef.current) {
+            dataRef.current = cached.data;
             setData(cached.data);
             setLoading(false);
             setError(null);
           }
 
-          // If stale, refresh in background (deduplicated)
           if (cached.isStale) {
             if (__DEV__) {
               // eslint-disable-next-line no-console
@@ -86,6 +109,7 @@ export function useCachedData<T>({
               .execute(key, fetcher, 25000)
               .then((freshData) => {
                 if (mountedRef.current) {
+                  dataRef.current = freshData;
                   setData(freshData);
                   dataCache.set(type, freshData, identifier, customTtl);
                   onSuccessRef.current?.(freshData);
@@ -102,8 +126,7 @@ export function useCachedData<T>({
         }
       }
 
-      // Cache miss or force refresh - fetch (deduplicated so multiple mounts share one call)
-      if (mountedRef.current) {
+      if (mountedRef.current && dataRef.current == null) {
         setLoading(true);
         setError(null);
       }
@@ -111,6 +134,7 @@ export function useCachedData<T>({
       const freshData = await requestDeduplicator.execute(key, fetcher, 25000);
 
       if (mountedRef.current) {
+        dataRef.current = freshData;
         setData(freshData);
         setLoading(false);
         setError(null);
@@ -135,16 +159,35 @@ export function useCachedData<T>({
 
   const invalidate = useCallback(async () => {
     await dataCache.invalidate(type, identifier);
-    setData(null);
   }, [type, identifier]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!enabled || !refetchOnFocus) return;
+      void fetchData(false);
+    }, [enabled, refetchOnFocus, fetchData])
+  );
+
   useEffect(() => {
-    if (enabled) {
-      fetchData(false);
-    } else {
-      setLoading(false);
-    }
-  }, [enabled, fetchData]);
+    if (!enabled || !refetchOnForeground) return undefined;
+    const onForeground = () => {
+      if (!isFocusedRef.current) return;
+      void fetchData(false);
+    };
+    appStateManager.on('foreground', onForeground);
+    return () => {
+      appStateManager.off('foreground', onForeground);
+    };
+  }, [enabled, refetchOnForeground, fetchData]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    return dataCache.subscribe((event) => {
+      if (!eventMatchesHook(event, type, identifier)) return;
+      if (!isFocusedRef.current) return;
+      void fetchData(true);
+    });
+  }, [enabled, type, identifier, fetchData]);
 
   return {
     data,
@@ -154,4 +197,3 @@ export function useCachedData<T>({
     invalidate,
   };
 }
-

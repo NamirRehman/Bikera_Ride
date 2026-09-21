@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Text, View, StyleSheet, ScrollView, Pressable, Linking, Alert } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import { ThreeDotLoader } from '../components/ThreeDotLoader';
 import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
+import { useCachedData } from '../hooks/useCachedData';
 
 interface UserXPProfile {
   userId: any;
@@ -48,13 +49,6 @@ export function PublicProfileScreen() {
 
   const principalParam = route.params?.principal || route.params?.principalParam || '';
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [xp, setXp] = useState<UserXPProfile | null>(null);
-  const [user, setUser] = useState<PublicUserProfile | null>(null);
-  const [isFriend, setIsFriend] = useState<boolean>(false);
-  const [isSelf, setIsSelf] = useState<boolean>(false);
-
   const principalObj = useMemo(() => {
     try {
       return principalParam ? Principal.fromText(principalParam) : null;
@@ -63,78 +57,70 @@ export function PublicProfileScreen() {
     }
   }, [principalParam]);
 
-  const viewerPrincipalText = useMemo(() => {
-    return viewerPrincipal || '';
-  }, [viewerPrincipal]);
+  const viewerPrincipalText = viewerPrincipal || '';
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      if (!principalObj) {
-        setError('Invalid principal');
-        setLoading(false);
-        return;
-      }
+  const fetchPublicProfile = useCallback(async () => {
+    if (!principalObj) {
+      throw new Error('Invalid principal');
+    }
 
+    const identity = getIdentity();
+    const xpActor: any = getBikeraXpActor({}, identity);
+    const userActor: any = getBikeraUserActor({}, identity);
+
+    const promises: any[] = [
+      xpActor.getPublicUserXPProfile(principalObj).catch(() => null),
+      userActor.getUserProfile(principalObj).catch(() => null),
+    ];
+
+    if (viewerPrincipalText) {
       try {
-        setLoading(true);
-        setError(null);
+        const vp = Principal.fromText(viewerPrincipalText);
+        promises.push(userActor.getFriends(vp).catch(() => []));
+      } catch {}
+    }
 
-        const identity = getIdentity();
-        const xpActor: any = getBikeraXpActor({}, identity);
-        const userActor: any = getBikeraUserActor({}, identity);
+    const results = await Promise.all(promises);
+    const xpData = results[0];
+    const userOpt = results[1];
+    const friendsArr = results.length > 2 ? results[2] : null;
 
-        const promises: any[] = [
-          xpActor.getPublicUserXPProfile(principalObj).catch(() => null),
-          userActor.getUserProfile(principalObj).catch(() => null),
-        ];
+    const unwrapOpt = (opt: any) =>
+      Array.isArray(opt) && opt.length > 0 ? opt[0] : opt && typeof opt === 'object' && !Array.isArray(opt) ? opt : null;
 
-        let viewerFriendsPromise: Promise<any> | null = null;
-        if (viewerPrincipalText) {
-          try {
-            const vp = Principal.fromText(viewerPrincipalText);
-            viewerFriendsPromise = userActor.getFriends(vp).catch(() => []);
-            promises.push(viewerFriendsPromise);
-          } catch {}
-        }
+    const up = unwrapOpt(userOpt);
+    const viewerIsSelf = !!(viewerPrincipalText && principalParam && viewerPrincipalText === principalParam);
+    let friend = false;
+    if (viewerIsSelf) {
+      friend = true;
+    } else if (Array.isArray(friendsArr)) {
+      const targetText = principalParam || '';
+      friend = friendsArr.some((x: any) => (x?.toText ? x.toText() : String(x)) === targetText);
+    }
 
-        const results = await Promise.all(promises);
-        const xpData = results[0];
-        const userOpt = results[1];
-        const friendsArr = results.length > 2 ? results[2] : null;
+    const toText = (v: any) => (Array.isArray(v) && v.length > 0 ? v[0] : typeof v === 'string' ? v : '');
+    const prefs = up?.preferences || {};
+    const links = up?.socialLinks || {};
+    const privacy = up?.privacySettings || {};
 
-        if (cancelled) return;
-
-        const unwrapOpt = (opt: any) =>
-          Array.isArray(opt) && opt.length > 0 ? opt[0] : opt && typeof opt === 'object' && !Array.isArray(opt) ? opt : null;
-
-        const up = unwrapOpt(userOpt);
-
-        // Self / friend checks
-        const viewerIsSelf = viewerPrincipalText && principalParam && viewerPrincipalText === principalParam;
-        setIsSelf(!!viewerIsSelf);
-
-        if (!viewerIsSelf && Array.isArray(friendsArr)) {
-          try {
-            const targetText = principalParam || '';
-            const isFr = friendsArr.some((x: any) => (x?.toText ? x.toText() : String(x)) === targetText);
-            setIsFriend(!!isFr);
-          } catch {
-            setIsFriend(false);
+    return {
+      isSelf: viewerIsSelf,
+      isFriend: friend,
+      xp: xpData
+        ? {
+            userId: principalParam,
+            totalXP: Number(xpData.totalXP || 0),
+            currentLevel: Number(xpData.currentLevel || 1),
+            xpToNextLevel: Number(xpData.xpToNextLevel || 0),
+            totalDistance: Number(xpData.totalDistance || 0),
+            lastActivity: Number(xpData.lastActivity || 0),
+            achievements: xpData.achievements || [],
+            referralCount: Number(xpData.referralCount || 0),
+            streakDays: Number(xpData.streakDays || 0),
           }
-        } else if (viewerIsSelf) {
-          setIsFriend(true);
-        }
-
-        setXp(xpData as UserXPProfile);
-
-        if (up) {
-          const toText = (v: any) => (Array.isArray(v) && v.length > 0 ? v[0] : typeof v === 'string' ? v : '');
-          const prefs = up.preferences || {};
-          const links = up.socialLinks || {};
-          const privacy = up.privacySettings || {};
-
-          setUser({
+        : null,
+      user: up
+        ? {
             username: up.username || '',
             displayName: toText(up.displayName),
             bio: toText(up.bio),
@@ -155,25 +141,23 @@ export function PublicProfileScreen() {
               showAchievements: !!privacy.showAchievements,
             },
             isVerified: !!up.isVerified,
-          });
-        } else {
-          setUser(null);
-        }
-      } catch (e: any) {
-        if (!cancelled) {
-          console.error('[PUBLIC_PROFILE] Failed to load:', e);
-          setError(e?.message || 'Failed to load profile');
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+          }
+        : null,
     };
+  }, [principalObj, principalParam, viewerPrincipalText, getIdentity]);
 
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [principalObj, viewerPrincipalText, principalParam]);
+  const { data: profileData, loading, error: fetchError } = useCachedData({
+    type: 'publicProfile',
+    identifier: principalObj ? `${principalParam}:${viewerPrincipalText || 'anon'}` : undefined,
+    fetcher: fetchPublicProfile,
+    enabled: !!principalObj,
+  });
+
+  const error = principalObj ? (fetchError ? fetchError.message : null) : 'Invalid principal';
+  const xp = (profileData?.xp as UserXPProfile | null) ?? null;
+  const user = profileData?.user ?? null;
+  const isFriend = profileData?.isFriend ?? false;
+  const isSelf = profileData?.isSelf ?? false;
 
   const allow = (field: string) => {
     const vis = (user?.privacy?.profileVisibility || 'public').toLowerCase();

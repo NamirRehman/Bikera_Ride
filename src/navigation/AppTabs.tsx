@@ -1,8 +1,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { StyleSheet, Platform } from 'react-native';
+import { StyleSheet, Platform, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CommonActions } from '@react-navigation/native';
@@ -35,13 +34,32 @@ function MoreStackNavigator() {
 
 export function AppTabs() {
   const insets = useSafeAreaInsets();
-  const baseHeight = Platform.OS === 'ios' ? 60 : 60;
+  const baseHeight = 64;
   const tabBarHeight = baseHeight + insets.bottom;
+
+  const iconFor = (routeName: string, focused: boolean) => {
+    switch (routeName) {
+      case 'Dashboard':
+        return focused ? 'home' : 'home-outline';
+      case 'Track':
+        return focused ? 'navigate' : 'navigate-outline';
+      case 'Friends':
+        return focused ? 'people' : 'people-outline';
+      case 'History':
+        return focused ? 'time' : 'time-outline';
+      case 'More':
+        return focused ? 'grid' : 'grid-outline';
+      default:
+        return focused ? 'ellipse' : 'ellipse-outline';
+    }
+  };
 
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
+        freezeOnBlur: true,
+        lazy: true,
         tabBarActiveTintColor: colors.brandPurple,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarAccessibilityLabel:
@@ -52,10 +70,11 @@ export function AppTabs() {
           route.name === 'More' ? 'More' : route.name,
         tabBarStyle: {
           backgroundColor: colors.surface2,
-          borderTopWidth: 0,
+          borderTopWidth: 1,
+          borderTopColor: colors.border2,
           height: tabBarHeight,
-          paddingTop: 8,
-          paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 8 : 10),
+          paddingTop: 6,
+          paddingBottom: Math.max(insets.bottom, 8),
           ...(Platform.OS === 'ios'
             ? {
                 shadowColor: '#000',
@@ -64,46 +83,37 @@ export function AppTabs() {
                 shadowOffset: { width: 0, height: -2 },
               }
             : {
-                elevation: 6,
+                elevation: 8,
               }
           ),
         },
-        tabBarShowLabel: false,
-        tabBarIcon: ({ color, focused }) => {
-          const icon = (() => {
-            switch (route.name) {
-              case 'Dashboard':
-                return 'home-outline';
-              case 'Track':
-                return 'navigate-outline';
-              case 'Friends':
-                return 'people-outline';
-              case 'History':
-                return 'time-outline';
-              case 'More':
-                return 'grid-outline';
-              default:
-                return 'ellipse-outline';
-            }
-          })();
-          if (focused) {
-            return (
-              <LinearGradient
-                colors={[
-                  colors.brandPurple,
-                  colors.brandViolet,
-                  colors.brandBlue300,
-                ]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.iconWrap}
-              >
-                <Ionicons name={icon as any} size={24} color="#fff" />
-              </LinearGradient>
-            );
-          }
-          return <Ionicons name={icon as any} size={22} color={color} />;
+        tabBarItemStyle: {
+          paddingTop: 2,
         },
+        tabBarIconStyle: {
+          marginTop: 0,
+        },
+        tabBarShowLabel: true,
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
+          marginTop: 2,
+        },
+        tabBarLabel:
+          route.name === 'Dashboard' ? 'Home' :
+          route.name === 'Track' ? 'Track' :
+          route.name === 'Friends' ? 'Friends' :
+          route.name === 'History' ? 'History' :
+          route.name === 'More' ? 'More' : route.name,
+        tabBarIcon: ({ color, focused }) => (
+          <View style={[styles.iconWrap, focused && styles.iconWrapFocused]}>
+            <Ionicons
+              name={iconFor(route.name, focused) as any}
+              size={22}
+              color={focused ? colors.brandPurple : color}
+            />
+          </View>
+        ),
       })}
     >
       <Tab.Screen name="Dashboard" getComponent={getDashboardScreen} />
@@ -130,11 +140,13 @@ export function AppTabs() {
 
 const styles = StyleSheet.create({
   iconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: Platform.OS === 'ios' ? -4 : 0,
+  },
+  iconWrapFocused: {
+    backgroundColor: 'rgba(66, 192, 251, 0.16)',
   },
 });

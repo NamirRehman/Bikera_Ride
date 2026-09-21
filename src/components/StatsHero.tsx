@@ -1,31 +1,53 @@
 import React, { memo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { colors, gradients, radii } from '../theme/tokens';
-import { LinearGradient } from 'expo-linear-gradient';
+import { View, Text, StyleSheet, Image } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, radii } from '../theme/tokens';
+
+const imeraLogo = require('../../assets/imera-token.png');
 
 export const StatsHero = memo(function StatsHero({
-  distance = '0.0 km',
+  distance = '0.0',
   xp = '0',
-}: { distance?: string; xp?: string }) {
+  imera = '0.00',
+}: {
+  distance?: string;
+  xp?: string;
+  imera?: string;
+}) {
   return (
     <View style={styles.container}>
-      <LinearGradient
-        colors={[colors.surface3, colors.surface1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.bg}
-      />
-
-      <View style={styles.inner}>
-        <View style={styles.left}>
-          <Text style={styles.label}>Today</Text>
-          <Text style={styles.smallLabel}>Distance</Text>
-          <Text style={styles.value}>{distance}</Text>
+      <Text style={styles.heading}>Your stats</Text>
+      <View style={styles.row}>
+        <View style={styles.cell}>
+          <View style={styles.iconWrap}>
+            <Ionicons name="bicycle" size={16} color={colors.brandPurple} />
+          </View>
+          <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
+            {distance}
+          </Text>
+          <Text style={styles.label}>km today</Text>
         </View>
 
-        <View style={styles.right}>
-          <Text style={styles.smallLabel}>XP</Text>
-          <Text style={styles.value}>{xp}</Text>
+        <View style={styles.divider} />
+
+        <View style={styles.cell}>
+          <View style={styles.iconWrap}>
+            <Ionicons name="flash" size={16} color={colors.brandPurple} />
+          </View>
+          <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
+            {xp}
+          </Text>
+          <Text style={styles.label}>XP</Text>
+        </View>
+
+        <View style={styles.divider} />
+
+        <View style={styles.cell}>
+          <Image source={imeraLogo} style={styles.imeraIcon} resizeMode="contain" accessibilityLabel="iMERA token" />
+          <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
+            {imera}
+          </Text>
+          <Text style={styles.label}>iMERA</Text>
         </View>
       </View>
     </View>
@@ -34,22 +56,63 @@ export const StatsHero = memo(function StatsHero({
 
 const styles = StyleSheet.create({
   container: {
-    height: 160,
     borderRadius: radii['3xl'],
-    overflow: 'hidden',
     marginVertical: 10,
     borderWidth: 1,
-    borderColor: colors.border2,
-    padding: 0,
+    borderColor: colors.border1,
     backgroundColor: colors.surfaceCard,
+    paddingVertical: 18,
+    paddingHorizontal: 10,
   },
-  bg: { ...StyleSheet.absoluteFillObject },
-  inner: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, justifyContent: 'space-between' },
-  left: { flex: 1 },
-  right: { width: 110, alignItems: 'flex-end' },
-  label: { color: colors.textTertiary, fontSize: 13, marginBottom: 4, letterSpacing: 0.5, textTransform: 'uppercase' },
-  smallLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '500' },
-  value: { color: colors.textPrimary, fontSize: 36, fontWeight: '900', marginTop: 8, letterSpacing: -1 },
+  heading: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  cell: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  divider: {
+    width: 1,
+    backgroundColor: colors.border1,
+    marginVertical: 4,
+  },
+  iconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(66,192,251,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  imeraIcon: {
+    width: 36,
+    height: 36,
+    marginBottom: 8,
+  },
+  value: {
+    color: colors.textPrimary,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+    marginBottom: 4,
+  },
+  label: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });
 
 export default StatsHero;

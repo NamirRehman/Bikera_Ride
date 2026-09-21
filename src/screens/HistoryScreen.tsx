@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getBikeraValidatorActor, getBikeraXpActor, getBikeraRewardsActor } from '../utils/actors';
 import { useCachedData } from '../hooks/useCachedData';
 import { LoadingBlock } from '../components/LoadingBlock';
+import { GuestBanner } from '../components/GuestBanner';
 import { useToastHelpers } from '../contexts/ToastContext';
 
 interface RideHistory {
@@ -38,7 +39,7 @@ const MIN_REWARDS = 80;
 
 export function HistoryScreen() {
   const navigation = useNavigation<any>();
-  const { principal } = useAuth();
+  const { principal, isGuest } = useAuth();
   const { error } = useToastHelpers();
   const [rides, setRides] = useState<RideHistory[]>([]);
   const [filter, setFilter] = useState<ActivityFilter>('all');
@@ -67,19 +68,9 @@ export function HistoryScreen() {
         getBikeraRewardsActor().getUserRewards(p, [BigInt(rewardsLimit)]),
       ]);
 
-      // Filter routes and apply time filter
-      const now = Date.now();
-      const timeFilterMs = {
-        week: 7 * 24 * 60 * 60 * 1000,
-        month: 30 * 24 * 60 * 60 * 1000,
-        year: 365 * 24 * 60 * 60 * 1000,
-      }[timeFilter] || Infinity;
-
       const validRoutes = (routeHistory || []).filter((r: any) => {
         const isValid = r.isValid === true || r.isValid === 1;
-        const createdAt = Number(r.createdAt || 0n) / 1_000_000;
-        const routeAge = now - createdAt;
-        return isValid && routeAge <= timeFilterMs;
+        return isValid;
       });
 
       // Map routes with accurate XP and iMERA calculations
@@ -153,11 +144,11 @@ export function HistoryScreen() {
       error('History Error', 'Failed to load your ride history.');
       return [];
     }
-  }, [principal, timeFilter, historyLimit]);
+  }, [principal, historyLimit]);
 
   const { data: historyData, loading: historyLoading, refetch } = useCachedData({
     type: 'history',
-    identifier: principal ? `${principal}:${timeFilter}:${historyLimit}` : undefined,
+    identifier: principal ? `${principal}:${historyLimit}` : undefined,
     fetcher: fetchHistoryData,
     enabled: !!principal,
   });
@@ -165,16 +156,23 @@ export function HistoryScreen() {
   // Apply activity type filter to cached data
   useEffect(() => {
     if (historyData) {
+      const now = Date.now();
+      const timeFilterMs = {
+        week: 7 * 24 * 60 * 60 * 1000,
+        month: 30 * 24 * 60 * 60 * 1000,
+        year: 365 * 24 * 60 * 60 * 1000,
+      }[timeFilter] || Infinity;
+      const timeFiltered = historyData.filter((r) => now - new Date(r.date).getTime() <= timeFilterMs);
       const filtered = filter === 'all'
-        ? historyData
-        : historyData.filter(r => r.routeType === filter);
+        ? timeFiltered
+        : timeFiltered.filter(r => r.routeType === filter);
       setRides(filtered);
       setHasMore(historyData.length >= historyLimit);
       setLoading(false);
-    } else if (!historyLoading && principal) {
+    } else if (!historyLoading) {
       setLoading(false);
     }
-  }, [historyData, historyLoading, filter, principal]);
+  }, [historyData, historyLoading, filter, timeFilter, historyLimit]);
 
   useEffect(() => {
     setLoading(historyLoading);
@@ -294,6 +292,7 @@ export function HistoryScreen() {
   const listHeader = (
     <View style={styles.listHeader}>
       <SectionHeader title="Ride History" subtitle="Track your progress and achievements" />
+      <GuestBanner compact message="Guest rides stay on this device and are not listed here until you sign in." />
 
       <View style={styles.summaryContainer}>
         <Card style={styles.summaryCard}>
@@ -408,7 +407,7 @@ export function HistoryScreen() {
   );
 
   return (
-    <Screen scroll={false} contentClassName={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
       <FlatList
         data={rides}
         keyExtractor={(item) => item.id}
@@ -421,8 +420,10 @@ export function HistoryScreen() {
           ) : (
             <View style={styles.emptyContainer}>
               <Ionicons name="bicycle-outline" size={48} color={colors.textTertiary} style={styles.emptyIcon} />
-              <Text style={styles.emptyText}>No rides yet</Text>
-              <Text style={styles.emptySubtext}>Record your first ride to see it here</Text>
+              <Text style={styles.emptyText}>{isGuest ? 'No synced rides yet' : 'No rides yet'}</Text>
+              <Text style={styles.emptySubtext}>
+                {isGuest ? 'Record a guest ride from Track, or sign in from More to sync history.' : 'Record your first ride to see it here'}
+              </Text>
               <Pressable
                 style={({ pressed }) => [styles.emptyCtaButton, pressed && { opacity: 0.9 }]}
                 onPress={() => navigation.navigate('Track')}

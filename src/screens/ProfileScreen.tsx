@@ -17,6 +17,7 @@ import { invalidateProfileCache } from '../utils/cacheHelpers';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { WalletScreen } from './WalletScreen';
 import { WEB_APP_URL } from '../config';
+import { GuestBanner } from '../components/GuestBanner';
 
 function SettingRow({ icon, label, value, onPress, isDestructive = false, rightComponent }: any) {
   return (
@@ -36,7 +37,7 @@ function SettingRow({ icon, label, value, onPress, isDestructive = false, rightC
 }
 
 export function ProfileScreen() {
-  const { principal, username: authUsername, logout, getIdentity } = useAuth();
+  const { principal, username: authUsername, logout, getIdentity, isGuest, exitGuestMode } = useAuth();
   const { mode, setMode } = useTheme();
   const { success, error, info } = useToastHelpers();
 
@@ -136,7 +137,7 @@ export function ProfileScreen() {
       profile: Array.isArray(profileOpt) && profileOpt.length > 0 ? profileOpt[0] : null,
       stats,
       xpSnapshot,
-      imeraBalance,
+      imeraBalance: Number(imeraBalance),
     };
   }, [principal, getIdentity]);
 
@@ -224,7 +225,7 @@ export function ProfileScreen() {
       }
 
       setLoading(false);
-    } else if (!profileLoading && principal) {
+    } else if (!profileLoading) {
       setLoading(false);
     }
   }, [profileData, profileLoading, principal]);
@@ -538,7 +539,7 @@ export function ProfileScreen() {
     );
   }
 
-  const displayUsername = profile?.username || authUsername || 'Biker';
+  const displayUsername = profile?.username || authUsername || (principal ? 'Biker' : 'Guest');
   const displayLevel = level || 1;
 
   return (
@@ -547,6 +548,27 @@ export function ProfileScreen() {
       <View style={styles.topHeader}>
         <Text style={styles.topUsername}>{displayUsername}</Text>
       </View>
+      <GuestBanner message="Profile edits and wallet transfers need a signed-in account. You can still browse these screens." />
+      {isGuest ? (
+        <View style={styles.guestSignIn}>
+          <Pressable
+            onPress={() => { void exitGuestMode(); }}
+            style={({ pressed }) => [styles.loginScreenButtonWrap, pressed && { opacity: 0.88 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Go to login screen"
+          >
+            <LinearGradient
+              colors={[colors.brandPurple, colors.brandBlue100]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.loginScreenButton}
+            >
+              <Ionicons name="log-in-outline" size={20} color="#fff" />
+              <Text style={styles.loginScreenButtonText}>Go to login screen</Text>
+            </LinearGradient>
+          </Pressable>
+        </View>
+      ) : null}
 
       {/* Tabs */}
       <View style={styles.tabsContainer}>
@@ -656,7 +678,7 @@ export function ProfileScreen() {
               <SettingRow
                 icon="globe-outline"
                 label="Bikera website"
-                value="bikera.app"
+                value="bikera.cloud"
                 onPress={() => Linking.openURL(WEB_APP_URL).catch(() => {})}
               />
               <View style={styles.separator} />
@@ -762,20 +784,39 @@ export function ProfileScreen() {
 
           {/* Actions */}
           <View style={styles.section}>
-            <Card style={{ padding: 0, overflow: 'hidden' }}>
-              <SettingRow icon="log-out-outline" label="Sign Out" isDestructive onPress={logout} />
-              <View style={styles.separator} />
-              <SettingRow
-                icon="trash-outline"
-                label="Delete Account (GDPR)"
-                isDestructive
-                onPress={() => {
-                  console.log('[PROFILE] Delete Account button pressed');
-                  setShowDeleteModal(true);
-                  console.log('[PROFILE] showDeleteModal set to true');
-                }}
-              />
-            </Card>
+            {isGuest ? (
+              <Pressable
+                onPress={() => { void exitGuestMode(); }}
+                style={({ pressed }) => [pressed && { opacity: 0.88 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Go to login screen"
+              >
+                <LinearGradient
+                  colors={[colors.brandPurple, colors.brandBlue100]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.loginScreenButton}
+                >
+                  <Ionicons name="log-in-outline" size={20} color="#fff" />
+                  <Text style={styles.loginScreenButtonText}>Go to login screen</Text>
+                </LinearGradient>
+              </Pressable>
+            ) : (
+              <Card style={{ padding: 0, overflow: 'hidden' }}>
+                <SettingRow icon="log-out-outline" label="Sign Out" isDestructive onPress={logout} />
+                <View style={styles.separator} />
+                <SettingRow
+                  icon="trash-outline"
+                  label="Delete Account (GDPR)"
+                  isDestructive
+                  onPress={() => {
+                    console.log('[PROFILE] Delete Account button pressed');
+                    setShowDeleteModal(true);
+                    console.log('[PROFILE] showDeleteModal set to true');
+                  }}
+                />
+              </Card>
+            )}
           </View>
 
           <Text style={styles.versionText}>Bikera v1.0.4 (Beta)</Text>
@@ -1015,6 +1056,29 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
     letterSpacing: 0.5,
+  },
+  guestSignIn: {
+    marginBottom: 16,
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  loginScreenButtonWrap: {
+    width: '100%',
+  },
+  loginScreenButton: {
+    minHeight: 52,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  loginScreenButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
   },
   tabsContainer: {
     flexDirection: 'row',

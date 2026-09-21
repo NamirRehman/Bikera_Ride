@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Text, View, StyleSheet, TouchableOpacity, Dimensions, Alert, ScrollView, Platform, Modal, Pressable, Animated } from 'react-native';
+import { Text, View, StyleSheet, TouchableOpacity, Dimensions, Alert, Platform, Modal, Pressable, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
@@ -27,14 +27,6 @@ interface SessionData {
   avgSpeed: number; // in km/h
   maxSpeed: number; // in km/h
   calories: number;
-}
-
-interface LogEntry {
-  id: string;
-  timestamp: number;
-  level: 'info' | 'debug' | 'warn' | 'error';
-  message: string;
-  data?: any;
 }
 
 // Mock Map Component (can be replaced with react-native-maps later)
@@ -81,10 +73,6 @@ export function TrackScreen() {
     maxSpeed: 0,
     calories: 0,
   });
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [showLogs, setShowLogs] = useState(false);
-  const logScrollViewRef = useRef<ScrollView>(null);
-
   const watchSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const lastPointRef = useRef<{ lat: number; lon: number; ts: number } | null>(null);
@@ -127,34 +115,14 @@ export function TrackScreen() {
   const FIRST_FLUSH_DELAY_MS = 150000; // 2.5 minutes (150 seconds) - same as web
   const CACHE_MAX_POINTS = 800; // Same as web
 
-  // Logging function - adds logs to state and console
-  const addLog = useCallback((level: LogEntry['level'], message: string, data?: any) => {
-    const logEntry: LogEntry = {
-      id: `${Date.now()}-${Math.random()}`,
-      timestamp: Date.now(),
-      level,
-      message,
-      data,
-    };
-
-    // Also log to console for development
+  const addLog = useCallback((level: 'info' | 'debug' | 'warn' | 'error', message: string, data?: any) => {
+    if (!__DEV__) return;
     const consoleMethod = level === 'error' ? console.error : level === 'warn' ? console.warn : level === 'debug' ? console.debug : console.log;
     if (data) {
       consoleMethod(`[${level.toUpperCase()}] ${message}`, data);
     } else {
       consoleMethod(`[${level.toUpperCase()}] ${message}`);
     }
-
-    // Add to state (keep last 100 logs)
-    setLogs((prev) => {
-      const newLogs = [...prev, logEntry];
-      return newLogs.slice(-100);
-    });
-
-    // Auto-scroll to bottom
-    setTimeout(() => {
-      logScrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
   }, []);
 
   // Haversine formula to calculate distance between two points
@@ -843,12 +811,14 @@ export function TrackScreen() {
 
       setPermissionStatus(status);
 
-      // Start session on canister
-      try {
-        await startSessionOnCanister();
-      } catch (e) {
-        addLog('warn', 'Session start failed, continuing anyway', e);
-        // Continue tracking even if session start fails
+      if (principal) {
+        try {
+          await startSessionOnCanister();
+        } catch (e) {
+          addLog('warn', 'Session start failed, continuing anyway', e);
+        }
+      } else {
+        addLog('info', 'Guest mode: tracking locally without saving to an account');
       }
 
       // Reset state
@@ -984,14 +954,16 @@ export function TrackScreen() {
     // Show confirmation alert first
     Alert.alert(
       'Stop Tracking?',
-      `Are you sure you want to stop tracking?\n\nYour ride will be saved with:\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\n• ${session.maxSpeed.toFixed(1)} km/h max speed`,
+      principal
+        ? `Stop this ride and save:\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\n• ${session.maxSpeed.toFixed(1)} km/h max speed`
+        : `Stop this guest ride?\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\nIt stays on this device until you sign in.`,
       [
         {
           text: 'Cancel',
           style: 'cancel',
         },
         {
-          text: 'Stop & Save',
+          text: principal ? 'Stop & Save' : 'Stop ride',
           style: 'destructive',
           onPress: async () => {
             await performStop();
@@ -1005,7 +977,11 @@ export function TrackScreen() {
   // Perform the actual stop operation
   const performStop = async () => {
     setIsStopping(true);
-    info('Saving your ride...', 'Please wait while we save your ride data.');
+    if (principal) {
+      info('Saving your ride...', 'Please wait while we save your ride data.');
+    } else {
+      info('Ride finished', 'This guest ride stays on this device.');
+    }
     
     // Store session data for success modal
     const finalSessionData = { ...session };
@@ -1052,15 +1028,15 @@ export function TrackScreen() {
     }
 
     // Flush cached data to backend (end flush - second call) - matches web app pattern
-    const cached = cachedRideDataRef.current;
-    addLog('info', `🛑 Stopping ride, sending END flush with ${cached.routePoints.length} points`);
-
-    // Send end flush with all remaining cached data
-    await flushRideDataToBackend(true);
-
-    // End session on canister - this saves the session to history
-    addLog('info', 'Ending session on canister');
-    await endSessionOnCanister();
+    if (principal) {
+      const cached = cachedRideDataRef.current;
+      addLog('info', `🛑 Stopping ride, sending END flush with ${cached.routePoints.length} points`);
+      await flushRideDataToBackend(true);
+      addLog('info', 'Ending session on canister');
+      await endSessionOnCanister();
+    } else {
+      addLog('info', 'Guest mode: skipped account save');
+    }
 
     // Clear cache after sending (matches web app)
     cachedRideDataRef.current = {
@@ -1132,11 +1108,16 @@ export function TrackScreen() {
   };
 
   return (
-    <Screen scroll={false} contentClassName={{ paddingHorizontal: 0, paddingTop: 0, flex: 1 }}>
+    <Screen scroll={false} contentStyle={{ paddingHorizontal: 0, paddingTop: 0, flex: 1 }}>
       <View style={styles.container}>
         {/* Header Overlay */}
         <View style={styles.headerOverlay}>
-          <Text style={styles.headerTitle}>Track Ride</Text>
+          <View>
+            <Text style={styles.headerTitle}>Track Ride</Text>
+            {!principal ? (
+              <Text style={styles.guestHint}>Guest — ride stays on this device</Text>
+            ) : null}
+          </View>
           <View style={styles.gpsIndicator}>
             <Ionicons name="cellular" size={14} color={getGpsStatusColor()} />
             <Text style={[styles.gpsText, { color: getGpsStatusColor() }]}>{getGpsStatus()}</Text>
@@ -1265,21 +1246,6 @@ export function TrackScreen() {
           </View>
         )}
 
-        {/* Log Viewer Toggle Button */}
-        <TouchableOpacity
-          style={styles.logToggleButton}
-          onPress={() => setShowLogs(!showLogs)}
-        >
-          <Ionicons
-            name={showLogs ? "chevron-down" : "chevron-up"}
-            size={20}
-            color={colors.textSecondary}
-          />
-          <Text style={styles.logToggleText}>
-            {showLogs ? 'Hide Logs' : 'Show Logs'} ({logs.length})
-          </Text>
-        </TouchableOpacity>
-
         {/* Loading Overlay during stop */}
         {isStopping && (
           <Modal
@@ -1291,7 +1257,7 @@ export function TrackScreen() {
             <View style={styles.loadingOverlay}>
               <View style={styles.loadingContent}>
                 <ThreeDotLoader color={colors.brandBlue100} size="large" />
-                <Text style={styles.loadingText}>Saving your ride...</Text>
+                <Text style={styles.loadingText}>{principal ? 'Saving your ride...' : 'Finishing ride...'}</Text>
                 <Text style={styles.loadingSubtext}>Please wait</Text>
               </View>
             </View>
@@ -1319,8 +1285,10 @@ export function TrackScreen() {
                 </LinearGradient>
               </View>
               
-              <Text style={styles.successTitle}>Ride Saved!</Text>
-              <Text style={styles.successSubtitle}>Your ride has been successfully recorded</Text>
+              <Text style={styles.successTitle}>{principal ? 'Ride Saved!' : 'Ride complete'}</Text>
+              <Text style={styles.successSubtitle}>
+                {principal ? 'Your ride has been successfully recorded' : 'Guest ride finished. Sign in from More to save future rides to your account.'}
+              </Text>
 
               {savedSessionData && (
                 <View style={styles.successStatsContainer}>
@@ -1381,54 +1349,6 @@ export function TrackScreen() {
             </View>
           </View>
         </Modal>
-
-        {/* Log Viewer Panel */}
-        {showLogs && (
-          <View style={styles.logPanel}>
-            <View style={styles.logHeader}>
-              <Text style={styles.logHeaderText}>Debug Logs ({logs.length})</Text>
-              <TouchableOpacity
-                onPress={() => setLogs([])}
-                style={styles.logClearButton}
-              >
-                <Text style={styles.logClearText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView
-              ref={logScrollViewRef}
-              style={styles.logScrollView}
-              contentContainerStyle={styles.logContent}
-            >
-              {logs.map((log) => {
-                const levelCapitalized = log.level.charAt(0).toUpperCase() + log.level.slice(1);
-                const logEntryStyle = (styles as any)[`logEntry${levelCapitalized}`];
-                const logLevelStyle = (styles as any)[`logLevel${levelCapitalized}`];
-
-                return (
-                  <View key={log.id} style={[styles.logEntry, logEntryStyle]}>
-                    <View style={styles.logEntryHeader}>
-                      <Text style={[styles.logLevel, logLevelStyle]}>
-                        {log.level.toUpperCase()}
-                      </Text>
-                      <Text style={styles.logTime}>
-                        {new Date(log.timestamp).toLocaleTimeString()}
-                      </Text>
-                    </View>
-                    <Text style={styles.logMessage}>{log.message}</Text>
-                    {log.data && (
-                      <Text style={styles.logData}>
-                        {typeof log.data === 'object' ? JSON.stringify(log.data, null, 2) : String(log.data)}
-                      </Text>
-                    )}
-                  </View>
-                );
-              })}
-              {logs.length === 0 && (
-                <Text style={styles.logEmpty}>No logs yet. Start tracking to see logs.</Text>
-              )}
-            </ScrollView>
-          </View>
-        )}
       </View>
     </Screen>
   );
@@ -1503,6 +1423,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textShadowColor: 'rgba(0,0,0,0.5)',
     textShadowRadius: 4,
+  },
+  guestHint: {
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 12,
+    fontWeight: '600',
   },
   gpsIndicator: {
     flexDirection: 'row',
@@ -1660,130 +1586,6 @@ const styles = StyleSheet.create({
     marginTop: 24,
     textShadowColor: 'rgba(0,0,0,0.8)',
     textShadowRadius: 4,
-  },
-  logToggleButton: {
-    position: 'absolute',
-    top: 60,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    gap: 4,
-    zIndex: 20,
-  },
-  logToggleText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  logPanel: {
-    position: 'absolute',
-    top: 100,
-    left: 16,
-    right: 16,
-    bottom: 160,
-    backgroundColor: 'rgba(6, 7, 23, 0.95)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    zIndex: 30,
-    overflow: 'hidden',
-  },
-  logHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.1)',
-  },
-  logHeaderText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  logClearButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  logClearText: {
-    color: colors.brandBlue100,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  logScrollView: {
-    flex: 1,
-  },
-  logContent: {
-    padding: 12,
-    gap: 8,
-  },
-  logEntry: {
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderLeftWidth: 3,
-  },
-  logEntryInfo: {
-    borderLeftColor: colors.brandBlue100,
-  },
-  logEntryDebug: {
-    borderLeftColor: colors.textSecondary,
-  },
-  logEntryWarn: {
-    borderLeftColor: colors.warning,
-  },
-  logEntryError: {
-    borderLeftColor: colors.error,
-  },
-  logEntryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  logLevel: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  logLevelInfo: {
-    color: colors.brandBlue100,
-  },
-  logLevelDebug: {
-    color: colors.textSecondary,
-  },
-  logLevelWarn: {
-    color: colors.warning,
-  },
-  logLevelError: {
-    color: colors.error,
-  },
-  logTime: {
-    color: colors.textTertiary,
-    fontSize: 10,
-    fontFamily: 'monospace',
-  },
-  logMessage: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  logData: {
-    color: colors.textSecondary,
-    fontSize: 10,
-    fontFamily: 'monospace',
-    marginTop: 4,
-  },
-  logEmpty: {
-    color: colors.textTertiary,
-    fontSize: 12,
-    textAlign: 'center',
-    padding: 20,
   },
   loadingOverlay: {
     flex: 1,

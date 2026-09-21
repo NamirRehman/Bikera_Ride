@@ -7,5 +7,5 @@
 export const SHADOW_WORKER_URL = 'https://bikerashadowworker-production.up.railway.app';
 
 // Primary web experience for account actions that are intentionally out of scope on mobile v1
-export const WEB_APP_URL = 'https://bikera.app';
+export const WEB_APP_URL = 'https://bikera.cloud';
 export const II_DERIVATION_ORIGIN = WEB_APP_URL;

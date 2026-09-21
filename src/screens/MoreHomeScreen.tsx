@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
+import { ConnectIIButton } from '../components/ConnectIIButton';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, radii, shadows } from '../theme/tokens';
 
@@ -82,7 +83,7 @@ function MenuCard({
 
 export function MoreHomeScreen() {
   const navigation = useNavigation<any>();
-  const { logout, username, principal } = useAuth();
+  const { logout, username, principal, isGuest, exitGuestMode } = useAuth();
 
   return (
     <Screen>
@@ -103,18 +104,20 @@ export function MoreHomeScreen() {
               </Text>
             </View>
             <View style={styles.profileTextCol}>
-              <Text style={styles.profileTitle}>{username || 'Rider'}</Text>
-              {principal && (
+              <Text style={styles.profileTitle}>{username || (isGuest ? 'Guest' : 'Rider')}</Text>
+              {principal ? (
                 <Text style={styles.profileSubtitle}>
                   {principal.slice(0, 5)}…{principal.slice(-4)}
                 </Text>
-              )}
+              ) : isGuest ? (
+                <Text style={styles.profileSubtitle}>Exploring without signing in</Text>
+              ) : null}
             </View>
           </View>
           <View style={styles.profileStatsRow}>
             <View style={styles.profileStat}>
               <Text style={styles.profileStatLabel}>Status</Text>
-              <Text style={styles.profileStatValue}>Connected</Text>
+              <Text style={styles.profileStatValue}>{isGuest ? 'Guest' : 'Connected'}</Text>
             </View>
             <View style={styles.profileStatDivider} />
             <View style={styles.profileStat}>
@@ -123,6 +126,24 @@ export function MoreHomeScreen() {
             </View>
           </View>
         </LinearGradient>
+
+        {isGuest ? (
+          <View style={styles.connectSection}>
+            <Text style={styles.sectionLabel}>Sign in</Text>
+            <Text style={styles.connectCopy}>
+              Save rides, XP, and iMERA to your Internet Identity. Guest browsing stays available.
+            </Text>
+            <ConnectIIButton />
+            <Pressable
+              onPress={() => { void exitGuestMode(); }}
+              style={({ pressed }) => [styles.loginScreenLink, pressed && { opacity: 0.8 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Go to login screen"
+            >
+              <Text style={styles.loginScreenLinkText}>Go to login screen</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {SECTIONS.map((section) => (
           <View key={section.label} style={styles.section}>
@@ -141,22 +162,24 @@ export function MoreHomeScreen() {
           </View>
         ))}
 
-        <View style={styles.logoutSection}>
-          <Pressable
-            onPress={() => logout()}
-            style={({ pressed }) => [styles.logoutButton, pressed && styles.logoutPressed]}
-            accessibilityLabel="Log out"
-            accessibilityRole="button"
-          >
-            <View style={styles.logoutRow}>
-              <View style={styles.logoutIconWrap}>
-                <Ionicons name="log-out-outline" size={18} color={colors.error} />
+        {isGuest ? null : (
+          <View style={styles.logoutSection}>
+            <Pressable
+              onPress={() => logout()}
+              style={({ pressed }) => [styles.logoutButton, pressed && styles.logoutPressed]}
+              accessibilityLabel="Log out"
+              accessibilityRole="button"
+            >
+              <View style={styles.logoutRow}>
+                <View style={styles.logoutIconWrap}>
+                  <Ionicons name="log-out-outline" size={18} color={colors.error} />
+                </View>
+                <Text style={styles.logoutText}>Log out</Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.error} />
               </View>
-              <Text style={styles.logoutText}>Log out</Text>
-              <Ionicons name="chevron-forward" size={18} color={colors.error} />
-            </View>
-          </Pressable>
-        </View>
+            </Pressable>
+          </View>
+        )}
       </View>
     </Screen>
   );
@@ -293,6 +316,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textTertiary,
     marginTop: 2,
+  },
+  connectSection: {
+    marginBottom: 24,
+    width: '100%',
+    padding: 16,
+    borderRadius: radii['3xl'],
+    borderWidth: 1.5,
+    borderColor: colors.borderAccent,
+    backgroundColor: 'rgba(66,192,251,0.08)',
+  },
+  connectCopy: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+    marginLeft: 4,
+  },
+  loginScreenLink: {
+    marginTop: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  loginScreenLinkText: {
+    color: colors.brandBlue100,
+    fontSize: 15,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   logoutSection: {
     marginTop: 8,

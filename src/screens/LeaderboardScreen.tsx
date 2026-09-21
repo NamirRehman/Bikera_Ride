@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Pressable, Text, View, StyleSheet, ScrollView, FlatList, Platform } from 'react-native';
+import { Pressable, Text, View, StyleSheet, ScrollView, FlatList, Platform, RefreshControl } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Principal } from '@dfinity/principal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -42,13 +42,14 @@ export function LeaderboardScreen() {
   const [totalUsers, setTotalUsers] = useState<number>(0);
   const [visibleCount, setVisibleCount] = useState(LEADERBOARD_PAGE_SIZE);
   const [hasMore, setHasMore] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const effectiveFilter: LeaderboardFilter = timeFilter === 'allTime' ? filter : 'xp';
 
   const fetchLeaderboardData = useCallback(async () => {
     try {
       const xpActor = getBikeraXpActor();
-      const limit = visibleCount;
+      const limit = 30;
 
       const timeFilterMap: any = {
         'allTime': { AllTime: null },
@@ -141,26 +142,26 @@ export function LeaderboardScreen() {
         hasMore: false,
       };
     }
-  }, [filter, effectiveFilter, timeFilter, principal, visibleCount]);
+  }, [filter, effectiveFilter, timeFilter, principal]);
 
-  const { data: leaderboardData, loading: leaderboardLoading } = useCachedData({
+  const { data: leaderboardData, loading: leaderboardLoading, refetch } = useCachedData({
     type: 'leaderboard',
-    identifier: `${filter}:${timeFilter}:${visibleCount}`,
+    identifier: `${effectiveFilter}:${timeFilter}`,
     fetcher: fetchLeaderboardData,
     enabled: true,
   });
 
   useEffect(() => {
     if (leaderboardData) {
-      setEntries(leaderboardData.entries);
+      setEntries(leaderboardData.entries.slice(0, visibleCount));
       setUserRank(leaderboardData.userRank);
       setTotalUsers(leaderboardData.totalUsers);
-      setHasMore(Boolean(leaderboardData.hasMore));
+      setHasMore(visibleCount < leaderboardData.entries.length);
       setLoading(false);
     } else if (!leaderboardLoading) {
       setLoading(false);
     }
-  }, [leaderboardData, leaderboardLoading]);
+  }, [leaderboardData, leaderboardLoading, visibleCount]);
 
   useEffect(() => {
     if (entries.length === 0) {
@@ -201,6 +202,12 @@ export function LeaderboardScreen() {
     if (!hasMore || loading) return;
     setVisibleCount((prev) => prev + LEADERBOARD_PAGE_SIZE);
   }, [hasMore, loading]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   const renderEntryItem = useCallback(({ item }: { item: LeaderboardEntry }) => (
     <View
@@ -363,7 +370,7 @@ export function LeaderboardScreen() {
   );
 
   return (
-    <Screen scroll={false} contentClassName={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
       <FlatList
         data={entries}
         keyExtractor={(item) => item.userId}
@@ -390,6 +397,9 @@ export function LeaderboardScreen() {
         maxToRenderPerBatch={6}
         windowSize={5}
         removeClippedSubviews={Platform.OS === 'android' || Platform.OS === 'ios'}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandPurple} />
+        }
       />
     </Screen>
   );

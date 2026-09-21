@@ -9,7 +9,7 @@ import { Feather } from '@expo/vector-icons';
 
 export function ComingSoonScreen() {
   return (
-    <Screen showHeader={false} contentClassName="p-4">
+    <Screen showHeader={false} contentStyle={{ padding: 16 }}>
       <SectionHeader title="Coming Soon" subtitle="Exciting features are on the way!" />
       <LinearGradient
         colors={[colors.brandPurple, colors.brandBlue100]}

@@ -5,7 +5,7 @@ import './src/polyfills';
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { NavigationContainer } from '@react-navigation/native';
+import { DarkTheme, NavigationContainer } from '@react-navigation/native';
 import { ThemeProvider } from './src/theme/ThemeContext';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { ToastProvider } from './src/contexts/ToastContext';
@@ -20,7 +20,12 @@ export default function App() {
           <ThemeProvider>
             <AuthProvider>
               <ToastProvider>
-                <NavigationContainer>
+                <NavigationContainer
+                  theme={{
+                    ...DarkTheme,
+                    colors: { ...DarkTheme.colors, background: '#000000' },
+                  }}
+                >
                   <RootNavigator />
                 </NavigationContainer>
               </ToastProvider>

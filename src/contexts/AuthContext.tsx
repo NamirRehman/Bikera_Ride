@@ -7,6 +7,7 @@ import { Ed25519KeyIdentity, Ed25519PublicKey } from '@dfinity/identity';
 import { DelegationIdentity, DelegationChain } from '@dfinity/identity';
 import { Alert } from 'react-native';
 import { II_DERIVATION_ORIGIN } from '../config';
+import { dataCache } from '../services/dataCache';
 
 // Internet Identity canister ID - use production ID or fallback
 // In React Native, process.env may not be available, so we use a fallback
@@ -97,12 +98,16 @@ const getWebBrowser = () => {
 
 type AuthContextValue = {
   isAuthenticated: boolean;
+  isGuest: boolean;
   principal: string | null;
   username: string | null;
   isRegistered: boolean | null;
   checkingAuth: boolean;
   checkingProfile: boolean;
+  isLoggingIn: boolean;
   login: () => Promise<void>;
+  enterGuestMode: () => Promise<void>;
+  exitGuestMode: () => Promise<void>;
   logout: () => Promise<void>;
   checkAuthStatus: () => Promise<void>;
   setRegistrationStatus: (registered: boolean, username?: string, email?: string) => Promise<void>;
@@ -115,6 +120,7 @@ type AuthContextValue = {
 const STORAGE_PRINCIPAL = 'bikera_principal_v1';
 const STORAGE_USERNAME = 'bikera_username_v1';
 const STORAGE_EMAIL = 'bikera_email_v1';
+const STORAGE_GUEST = 'bikera_guest_v1';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -122,8 +128,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [principal, setPrincipal] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [checkingProfile, setCheckingProfile] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
   const [delegatedIdentity, setDelegatedIdentity] = useState<DelegationIdentity | null>(null);
 
@@ -299,6 +307,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsRegistered(null);
       setDelegatedIdentity(null);
     } finally {
+      try {
+        const [storedPrincipal, guestFlag] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_PRINCIPAL),
+          AsyncStorage.getItem(STORAGE_GUEST),
+        ]);
+        setIsGuest(!storedPrincipal && guestFlag === '1');
+      } catch {
+        // ignore guest restore errors
+      }
       setCheckingAuth(false);
     }
   }, [authClient]);
@@ -324,9 +341,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [authClient, checkAuthStatus, principal]);
 
+  const enterGuestMode = useCallback(async () => {
+    try {
+      await AsyncStorage.setItem(STORAGE_GUEST, '1');
+    } catch {}
+    setIsGuest(true);
+    setCheckingAuth(false);
+    setIsLoggingIn(false);
+  }, []);
+
+  const exitGuestMode = useCallback(async () => {
+    try {
+      await AsyncStorage.removeItem(STORAGE_GUEST);
+    } catch {}
+    setIsGuest(false);
+    setCheckingAuth(false);
+    setIsLoggingIn(false);
+  }, []);
+
+  const recoverFromFailedLogin = useCallback(async (keepGuest: boolean) => {
+    setCheckingAuth(false);
+    setIsLoggingIn(false);
+    if (keepGuest) {
+      setIsGuest(true);
+      try {
+        await AsyncStorage.setItem(STORAGE_GUEST, '1');
+      } catch {}
+      return;
+    }
+    await enterGuestMode();
+  }, [enterGuestMode]);
+
+  const clearGuestAfterLogin = useCallback(async () => {
+    try {
+      await AsyncStorage.removeItem(STORAGE_GUEST);
+    } catch {}
+    setIsGuest(false);
+  }, []);
+
   const login = async () => {
-    // Set loading state immediately
-    setCheckingAuth(true);
+    const keepGuest = isGuest;
+    setIsLoggingIn(true);
     console.log('[AUTH] Login started');
     
     // Get or create authClient
@@ -348,10 +403,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log('[AUTH] AuthClient created successfully');
       } catch (createError) {
         console.error('[AUTH] Failed to create AuthClient:', createError);
-        setCheckingAuth(false);
+        setIsLoggingIn(false);
         Alert.alert(
           'Authentication Error',
-          'Failed to initialize authentication. Please try again or restart the app.',
+          'Failed to initialize authentication. Please try again, or tap Explore the app.',
         );
         return;
       }
@@ -374,10 +429,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           maxTimeToLive: BigInt(7 * 24 * 60 * 60 * 1000 * 1000 * 1000), // 7 days in nanoseconds
           windowOpenerFeatures: 'left=100,top=100,width=720,height=800,toolbar=0,menubar=0,location=0',
           onSuccess: async () => {
+            await clearGuestAfterLogin();
             await checkAuthStatus();
           },
           onError: (error?: string) => {
             console.error('Login error:', error);
+            void recoverFromFailedLogin(keepGuest);
           },
         });
       } else {
@@ -389,9 +446,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Get WebBrowser (must call getWebBrowser() to initialize it)
         const webBrowser = getWebBrowser();
         if (!webBrowser) {
-          Alert.alert('Error', 'expo-web-browser is not available. Please install it.');
+          Alert.alert('Error', 'expo-web-browser is not available. Please try again.');
+          await recoverFromFailedLogin(keepGuest);
           return;
         }
+
+        try {
+          webBrowser.maybeCompleteAuthSession?.();
+        } catch {}
         
         // Always use production bridge URL for delegation (even in dev builds)
         const bridgeUrl = 'https://fn3mc-ryaaa-aaaap-an4zq-cai.icp0.io/ii-bridge.html';
@@ -412,13 +474,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log('[AUTH] Generated session key, opening bridge...');
         console.log('[AUTH] Bridge URL:', bridgeUrlWithParams.substring(0, 100) + '...');
         console.log('[AUTH] Redirect URI:', redirectUri);
-        
-        // Open bridge in WebBrowser modal (webBrowser already checked above)
-        console.log('[AUTH] Opening WebBrowser session...');
-        const result = await webBrowser.openAuthSessionAsync(bridgeUrlWithParams, redirectUri, {
+
+        // Keep the real browser session (not incognito) so Internet Identity can
+        // reuse the existing passkey / Samsung Pass / Chrome identity instead of
+        // showing a long "create new" flow that hides Continue at the bottom.
+        const authSessionOptions: Record<string, unknown> = {
           showInRecents: true,
-          preferEphemeralSession: true,
-        });
+          preferEphemeralSession: false,
+          createTask: false,
+          showTitle: true,
+          enableBarCollapsing: false,
+          toolbarColor: '#0B1220',
+          dismissButtonStyle: 'close',
+        };
+
+        if (PlatformCheck.OS === 'android') {
+          try {
+            const tabs = await webBrowser.getCustomTabsSupportingBrowsersAsync?.();
+            const packages: string[] = tabs?.browserPackages || [];
+            const chromePkg = [
+              'com.android.chrome',
+              'com.chrome.beta',
+              'com.chrome.dev',
+              'com.google.android.apps.chrome',
+            ].find((pkg) => packages.includes(pkg));
+            const browserPackage = chromePkg || tabs?.preferredBrowserPackage || undefined;
+            if (browserPackage) {
+              authSessionOptions.browserPackage = browserPackage;
+              try {
+                await webBrowser.warmUpAsync(browserPackage);
+                await webBrowser.mayInitWithUrlAsync(identityProvider, browserPackage);
+              } catch {}
+            }
+          } catch (browserErr) {
+            console.warn('[AUTH] Could not pick Custom Tabs browser:', browserErr);
+          }
+        }
+        
+        console.log('[AUTH] Opening WebBrowser session...');
+        const result = await webBrowser.openAuthSessionAsync(
+          bridgeUrlWithParams,
+          redirectUri,
+          authSessionOptions,
+        );
         
         console.log('[AUTH] WebBrowser session result:', result.type);
         
@@ -627,6 +725,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 console.log('[AUTH] Storing identity and principal...');
                 setDelegatedIdentity(identity);
                 setPrincipal(principal);
+                await clearGuestAfterLogin();
                 
                 // Store principal and delegation data for persistence
                 try {
@@ -653,9 +752,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   try {
                     await AsyncStorage.setItem(STORAGE_PRINCIPAL, principalFromBridge);
                   } catch {}
+                  await clearGuestAfterLogin();
                   await checkAuthStatus();
                 } else {
-                  setCheckingAuth(false);
+                  await recoverFromFailedLogin(keepGuest);
                 }
               }
             } else {
@@ -667,62 +767,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 try {
                   await AsyncStorage.setItem(STORAGE_PRINCIPAL, principalFromBridge);
                 } catch {}
+                await clearGuestAfterLogin();
                 await checkAuthStatus();
               } else {
                 console.error('[AUTH] No delegation or principal in callback URL');
-                setCheckingAuth(false);
+                await recoverFromFailedLogin(keepGuest);
               }
             }
           } catch (error) {
             console.error('[AUTH] Error parsing callback URL:', error);
-            setCheckingAuth(false);
+            await recoverFromFailedLogin(keepGuest);
           }
-        } else if (result.type === 'cancel') {
-          console.log('[AUTH] User cancelled authentication');
-          setCheckingAuth(false);
+        } else if (result.type === 'cancel' || result.type === 'dismiss') {
+          console.log('[AUTH] User cancelled authentication:', result.type);
+          try {
+            webBrowser.dismissBrowser?.();
+            webBrowser.dismissAuthSession?.();
+          } catch {}
+          await recoverFromFailedLogin(keepGuest);
         } else {
           console.error('[AUTH] Authentication failed:', result);
-          setCheckingAuth(false);
+          await recoverFromFailedLogin(keepGuest);
         }
       }
     } catch (error) {
       console.error('[AUTH] Error during login:', error);
-      setCheckingAuth(false);
+      await recoverFromFailedLogin(keepGuest);
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
   const logout = async () => {
-    if (!authClient) return;
-
     try {
-      // Stop checking profile immediately
       setCheckingProfile(false);
-      
-      await authClient.logout();
-      
-      // Clear all state
       setPrincipal(null);
       setUsername(null);
       setIsRegistered(null);
       setDelegatedIdentity(null);
-      
-      // Clear storage (including delegation data)
+      setIsGuest(false);
+
+      if (authClient) {
+        await authClient.logout();
+      }
+
       await Promise.all([
         AsyncStorage.removeItem(STORAGE_PRINCIPAL),
         AsyncStorage.removeItem(STORAGE_USERNAME),
         AsyncStorage.removeItem(STORAGE_EMAIL),
         AsyncStorage.removeItem('bikera_delegation'),
         AsyncStorage.removeItem('bikera_session_key'),
+        AsyncStorage.removeItem(STORAGE_GUEST),
+        dataCache.clear(),
       ]);
-      
-      // Re-check auth status to ensure everything is cleared
+
       await checkAuthStatus();
     } catch (error) {
       console.error('Error during logout:', error);
-      // Still clear state even if logout fails
       setPrincipal(null);
       setUsername(null);
       setIsRegistered(null);
+      setIsGuest(false);
       setCheckingProfile(false);
     }
   };
@@ -733,6 +838,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.removeItem(STORAGE_PRINCIPAL);
       await AsyncStorage.removeItem(STORAGE_USERNAME);
       await AsyncStorage.removeItem(STORAGE_EMAIL);
+      await dataCache.clear();
       setPrincipal(null);
       setUsername(null);
       setIsRegistered(null);
@@ -789,12 +895,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AuthContextValue>(
     () => ({
       isAuthenticated: !!principal,
+      isGuest,
       principal,
       username,
       isRegistered,
       checkingAuth,
       checkingProfile,
+      isLoggingIn,
       login,
+      enterGuestMode,
+      exitGuestMode,
       logout,
       checkAuthStatus: () => checkAuthStatus(),
       setRegistrationStatus,
@@ -803,7 +913,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       getDelegatedIdentity,
       clearAuthData,
     }),
-    [principal, username, isRegistered, checkingAuth, checkingProfile, checkAuthStatus, getIdentity, getDelegatedIdentity, clearAuthData, setRegistrationStatus],
+    [principal, isGuest, username, isRegistered, checkingAuth, checkingProfile, isLoggingIn, checkAuthStatus, enterGuestMode, exitGuestMode, getIdentity, getDelegatedIdentity, clearAuthData, setRegistrationStatus],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

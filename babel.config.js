@@ -1,11 +1,9 @@
-// babel.config.cjs
 module.exports = function (api) {
   api.cache(true);
   return {
-    presets: ['babel-preset-expo', 'nativewind/babel'],
-    plugins: [
-      // Temporarily disabled for step-by-step testing
-      // 'react-native-reanimated/plugin',
-    ],
+    // NativeWind is unused (no className in the app). Its babel preset was
+    // wrapping host views via css-interop and blanking the login screen.
+    presets: ['babel-preset-expo'],
+    plugins: [],
   };
 };

@@ -19,24 +19,62 @@ interface CacheConfig {
 // Optimized for mobile: longer TTLs to reduce backend load
 const CACHE_CONFIGS: Record<string, CacheConfig> = {
   // Dashboard data - longer TTL for better performance
-  dashboard: { ttl: 2 * 60 * 1000, staleThreshold: 60 * 1000 }, // 2min TTL, stale after 1min
-  profile: { ttl: 10 * 60 * 1000, staleThreshold: 5 * 60 * 1000 }, // 10min TTL, stale after 5min
-  stats: { ttl: 3 * 60 * 1000, staleThreshold: 90 * 1000 }, // 3min TTL, stale after 90s
-  staking: { ttl: 3 * 60 * 1000, staleThreshold: 90 * 1000 }, // 3min TTL
-  groups: { ttl: 5 * 60 * 1000, staleThreshold: 2 * 60 * 1000 }, // 5min TTL
-  leaderboard: { ttl: 5 * 60 * 1000, staleThreshold: 2 * 60 * 1000 }, // 5min TTL
-  history: { ttl: 10 * 60 * 1000, staleThreshold: 5 * 60 * 1000 }, // 10min TTL
-  friends: { ttl: 5 * 60 * 1000, staleThreshold: 2 * 60 * 1000 }, // 5min TTL
-  wallet: { ttl: 30 * 1000, staleThreshold: 15 * 1000 }, // 30s TTL, stale after 15s
-  userPublic: { ttl: 15 * 60 * 1000, staleThreshold: 5 * 60 * 1000 }, // 15min TTL for public user summaries
-  config: { ttl: 60 * 60 * 1000, staleThreshold: 30 * 60 * 1000 }, // 1hr TTL
-  default: { ttl: 2 * 60 * 1000, staleThreshold: 60 * 1000 }, // 2min default
+  dashboard: { ttl: 2 * 60 * 1000, staleThreshold: 20 * 1000 },
+  profile: { ttl: 10 * 60 * 1000, staleThreshold: 60 * 1000 },
+  stats: { ttl: 3 * 60 * 1000, staleThreshold: 30 * 1000 },
+  staking: { ttl: 3 * 60 * 1000, staleThreshold: 30 * 1000 },
+  groups: { ttl: 5 * 60 * 1000, staleThreshold: 60 * 1000 },
+  leaderboard: { ttl: 5 * 60 * 1000, staleThreshold: 60 * 1000 },
+  history: { ttl: 10 * 60 * 1000, staleThreshold: 30 * 1000 },
+  friends: { ttl: 5 * 60 * 1000, staleThreshold: 30 * 1000 },
+  wallet: { ttl: 60 * 1000, staleThreshold: 15 * 1000 },
+  userPublic: { ttl: 15 * 60 * 1000, staleThreshold: 5 * 60 * 1000 },
+  publicProfile: { ttl: 10 * 60 * 1000, staleThreshold: 2 * 60 * 1000 },
+  config: { ttl: 60 * 60 * 1000, staleThreshold: 30 * 60 * 1000 },
+  default: { ttl: 2 * 60 * 1000, staleThreshold: 20 * 1000 },
 };
+
+function serializeCache(value: unknown): string {
+  return JSON.stringify(value, (_key, val) => (typeof val === 'bigint' ? val.toString() : val));
+}
+
+export type CacheChangeEvent =
+  | { kind: 'invalidate'; type: string; identifier?: string }
+  | { kind: 'invalidateType'; type: string }
+  | { kind: 'clear' };
+
+type CacheListener = (event: CacheChangeEvent) => void;
 
 class DataCacheService {
   private memoryCache: Map<string, CacheEntry<any>> = new Map();
+  private listeners: Set<CacheListener> = new Set();
   private readonly CACHE_PREFIX = 'bikera_cache_';
   private readonly MAX_MEMORY_ENTRIES = 100;
+
+  subscribe(listener: CacheListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notify(event: CacheChangeEvent): void {
+    this.listeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch {
+        // Ignore listener errors so one screen cannot break others
+      }
+    });
+  }
+
+  private matchesEntry(key: string, type: string, identifier?: string): boolean {
+    if (!identifier) {
+      return key === type || key.startsWith(`${type}:`);
+    }
+    const exact = `${type}:${identifier}`;
+    return key === exact || key.startsWith(`${exact}:`);
+  }
 
   /**
    * Get cache key for a specific data type and identifier
@@ -118,7 +156,7 @@ class DataCacheService {
           }
         }
       } catch (error) {
-        console.warn('[CACHE] Error reading from storage:', error);
+        if (__DEV__) console.warn('[CACHE] Error reading from storage:', error);
       }
     }
 
@@ -151,55 +189,72 @@ class DataCacheService {
     // Store in AsyncStorage (async, don't await)
     try {
       const storageKey = this.CACHE_PREFIX + cacheKey;
-      await AsyncStorage.setItem(storageKey, JSON.stringify(entry));
+      await AsyncStorage.setItem(storageKey, serializeCache(entry));
     } catch (error) {
-      console.warn('[CACHE] Error writing to storage:', error);
+      if (__DEV__) console.warn('[CACHE] Error writing to storage:', error);
     }
   }
 
   /**
-   * Invalidate cache for a specific type/identifier
+   * Invalidate cache for a specific type/identifier.
+   * Also drops composite keys such as history:principal:20 when identifier is principal.
    */
   async invalidate(type: string, identifier?: string): Promise<void> {
-    const cacheKey = this.getCacheKey(type, identifier);
-    
-    // Remove from memory
-    this.memoryCache.delete(cacheKey);
-
-    // Remove from storage
-    try {
-      const storageKey = this.CACHE_PREFIX + cacheKey;
-      await AsyncStorage.removeItem(storageKey);
-    } catch (error) {
-      console.warn('[CACHE] Error removing from storage:', error);
+    if (!identifier) {
+      await this.invalidateType(type);
+      return;
     }
+
+    const keysToDelete: string[] = [];
+    this.memoryCache.forEach((_, key) => {
+      if (this.matchesEntry(key, type, identifier)) {
+        keysToDelete.push(key);
+      }
+    });
+    keysToDelete.forEach((key) => this.memoryCache.delete(key));
+
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const keysToRemove = keys.filter((storageKey) => {
+        if (!storageKey.startsWith(this.CACHE_PREFIX)) return false;
+        return this.matchesEntry(storageKey.slice(this.CACHE_PREFIX.length), type, identifier);
+      });
+      if (keysToRemove.length > 0) {
+        await AsyncStorage.multiRemove(keysToRemove);
+      }
+    } catch (error) {
+      if (__DEV__) console.warn('[CACHE] Error removing from storage:', error);
+    }
+
+    this.notify({ kind: 'invalidate', type, identifier });
   }
 
   /**
    * Invalidate all caches of a specific type
    */
   async invalidateType(type: string): Promise<void> {
-    const prefix = this.CACHE_PREFIX + type + ':';
-    
-    // Remove from memory
     const keysToDelete: string[] = [];
     this.memoryCache.forEach((_, key) => {
-      if (key.startsWith(type + ':')) {
+      if (this.matchesEntry(key, type)) {
         keysToDelete.push(key);
       }
     });
-    keysToDelete.forEach(key => this.memoryCache.delete(key));
+    keysToDelete.forEach((key) => this.memoryCache.delete(key));
 
-    // Remove from storage
     try {
       const keys = await AsyncStorage.getAllKeys();
-      const keysToRemove = keys.filter(key => key.startsWith(prefix));
+      const keysToRemove = keys.filter((storageKey) => {
+        if (!storageKey.startsWith(this.CACHE_PREFIX)) return false;
+        return this.matchesEntry(storageKey.slice(this.CACHE_PREFIX.length), type);
+      });
       if (keysToRemove.length > 0) {
         await AsyncStorage.multiRemove(keysToRemove);
       }
     } catch (error) {
-      console.warn('[CACHE] Error removing type from storage:', error);
+      if (__DEV__) console.warn('[CACHE] Error removing type from storage:', error);
     }
+
+    this.notify({ kind: 'invalidateType', type });
   }
 
   /**
@@ -215,8 +270,10 @@ class DataCacheService {
         await AsyncStorage.multiRemove(cacheKeys);
       }
     } catch (error) {
-      console.warn('[CACHE] Error clearing storage:', error);
+      if (__DEV__) console.warn('[CACHE] Error clearing storage:', error);
     }
+
+    this.notify({ kind: 'clear' });
   }
 
   /**
@@ -234,4 +291,4 @@ class DataCacheService {
 export const dataCache = new DataCacheService();
 
 // Export types
-export type { CacheEntry, CacheConfig };
+export type { CacheEntry, CacheConfig, CacheListener };

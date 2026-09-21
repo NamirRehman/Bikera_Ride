@@ -39,6 +39,12 @@ export class ErrorBoundary extends Component<Props, State> {
         });
     }
 
+    componentDidUpdate(prevProps: Props) {
+        if (this.state.hasError && prevProps.children !== this.props.children) {
+            this.resetError();
+        }
+    }
+
     resetError = () => {
         this.setState({
             hasError: false,

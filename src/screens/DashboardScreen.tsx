@@ -1,31 +1,28 @@
-import React, { useMemo, useEffect, useState, useCallback, memo } from 'react';
-import { Text, View, StyleSheet, RefreshControl } from 'react-native';
+import React, { useMemo, useEffect, useState, useCallback } from 'react';
+import { Text, View, StyleSheet, RefreshControl, Pressable } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { Principal } from '@dfinity/principal';
 
 import { Screen } from '../components/Screen';
-import { Card } from '../components/Card';
 import { SectionHeader } from '../components/SectionHeader';
 import StatsHero from '../components/StatsHero';
 import QuickActions from '../components/QuickActions';
 import { useAuth } from '../contexts/AuthContext';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { colors, radii } from '../theme/tokens';
-import { ThreeDotLoader } from '../components/ThreeDotLoader';
+import { colors } from '../theme/tokens';
 import { LoadingBlock } from '../components/LoadingBlock';
+import { GuestBanner } from '../components/GuestBanner';
 import {
   getBikeraXpActor,
   getBikeraImeraActor,
   getBikeraUserActor,
-  getBikeraMainActor,
   getShadowClient,
   getHost,
 } from '../utils/actors';
 import { HttpAgent } from '@dfinity/agent';
 import { useCachedData } from '../hooks/useCachedData';
-import { dataCache } from '../services/dataCache';
-import { useToastHelpers } from '../contexts/ToastContext';
-import { appStateManager } from '../services/appStateManager';
 
 interface DashboardStats {
   xp: number | null;
@@ -36,22 +33,9 @@ interface DashboardStats {
   xpToNextLevel: number | null;
 }
 
-interface MiningRound {
-  id: number;
-  status: 'active' | 'completed' | 'pending';
-  startTime: number;
-  endTime: number;
-  participants: number;
-  totalMined: number;
-  progress: number;
-  timeRemaining: string;
-}
-
 export function DashboardScreen() {
-  const { username, principal, getIdentity } = useAuth();
-  const { error, success } = useToastHelpers();
+  const { username, principal, getIdentity, isGuest } = useAuth();
   const navigation = useNavigation<any>();
-  const [loading, setLoading] = useState(true);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats>({
     xp: null,
@@ -61,10 +45,6 @@ export function DashboardScreen() {
     todayDistance: null,
     xpToNextLevel: null,
   });
-  const [miningRound, setMiningRound] = useState<MiningRound | null>(null);
-  const [miningLoading, setMiningLoading] = useState(true);
-  const [callerText, setCallerText] = useState<string | null>(null);
-  const [callerTextLoading, setCallerTextLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Memoize computed values
@@ -84,15 +64,21 @@ export function DashboardScreen() {
   ], [navigation]);
 
   // Memoize formatted stats
-  const formattedDistance = useMemo(() => 
-    stats.todayDistance !== null ? `${stats.todayDistance.toFixed(1)} km` : '0.0 km',
+  const formattedDistance = useMemo(
+    () => (stats.todayDistance !== null ? stats.todayDistance.toFixed(1) : '0.0'),
     [stats.todayDistance]
   );
 
-  const formattedXP = useMemo(() => 
-    stats.xp !== null ? stats.xp.toLocaleString() : '0',
+  const formattedXP = useMemo(
+    () => (stats.xp !== null ? stats.xp.toLocaleString() : '0'),
     [stats.xp]
   );
+
+  const formattedImera = useMemo(() => {
+    const value = stats.imera ?? 0;
+    if (value >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    return value.toFixed(2);
+  }, [stats.imera]);
 
   // Helper functions
   const nsToMs = (v: any): number => {
@@ -103,20 +89,6 @@ export function DashboardScreen() {
   };
 
   const toNum = (v: any): number => (typeof v === 'bigint' ? Number(v) : Number(v));
-
-  // Format time remaining
-  const formatTimeRemaining = (endTime: number): string => {
-    const now = Date.now();
-    const remaining = endTime - now;
-    if (remaining <= 0) return 'Round ending...';
-    const hours = Math.floor(remaining / 3600000);
-    const minutes = Math.floor((remaining % 3600000) / 60000);
-    const seconds = Math.floor((remaining % 60000) / 1000);
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
 
   // Fetch dashboard stats with caching
   const fetchDashboardData = useCallback(async () => {
@@ -165,12 +137,11 @@ export function DashboardScreen() {
     };
 
     // Load all snapshots in parallel (optimized - reduced timeout for faster failure)
-    const [xpSnapshot, rewardsSnapshot, dashboardSnapshot, imeraBalance, activitySessions, userProfile] = await Promise.all([
+    const [xpSnapshot, dashboardSnapshot, imeraBalance, activitySessions, userProfile] = await Promise.all([
       withTimeout(shadow.getXPSnapshot(p, true).catch(() => null), 8000, null),
-      withTimeout(shadow.getRewardsSnapshot(p, true).catch(() => null), 8000, null),
       withTimeout(shadow.getUserDashboardSnapshot(p, true).catch(() => null), 8000, null),
       withTimeout(imeraActor.icrc1_balance_of({ owner: p, subaccount: [] }).catch(() => 0n), 8000, 0n),
-      withTimeout(shadow.getActivitySessions(p, BigInt(20), BigInt(0)).catch(() => []), 8000, []), // Reduced from 50 to 20
+      withTimeout(shadow.getActivitySessions(p, BigInt(20), BigInt(0)).catch(() => []), 8000, []),
       withTimeout(userActor.getCurrentUserProfile(p).catch(() => null), 8000, null),
     ]);
 
@@ -262,218 +233,8 @@ export function DashboardScreen() {
     if (dashboardData) {
       setStats(dashboardData.stats);
       setDisplayName(dashboardData.displayName);
-      setLoading(false);
-    } else if (!dashboardLoading && principal) {
-      setLoading(false);
     }
-  }, [dashboardData, dashboardLoading, principal]);
-
-  // Set loading state
-  useEffect(() => {
-    setLoading(dashboardLoading);
-  }, [dashboardLoading]);
-
-  // Refresh stats every 3 minutes (further reduced for better performance)
-  // Cache will handle stale-while-revalidate pattern
-  useEffect(() => {
-    if (!principal) return;
-
-    const interval = setInterval(() => {
-      // Only refetch if app is in foreground
-      if (appStateManager.isActive()) {
-        refetch();
-      }
-    }, 3 * 60 * 1000); // 3 minutes
-
-    return () => clearInterval(interval);
-  }, [principal, refetch]);
-
-  // Fetch mining round (optimized - less frequent updates)
-  useEffect(() => {
-    let cancelled = false;
-
-    const fetchMiningRound = async (showLoader: boolean = false) => {
-      // Skip if app is in background
-      if (!appStateManager.isActive() && !showLoader) {
-        return;
-      }
-
-      try {
-        // Only show loader on initial load or when explicitly requested
-        if (showLoader) {
-          setMiningLoading(true);
-        }
-        const mainActor = getBikeraMainActor();
-
-        // Check if automated mining is active
-        const active: any = await mainActor.isAutomatedMiningActive();
-        const isActiveBool = Boolean(active);
-        if (!isActiveBool) {
-          if (!cancelled) {
-            setMiningRound(null);
-            if (showLoader) {
-              setMiningLoading(false);
-            }
-          }
-          return;
-        }
-
-        const opt: any = await mainActor.getCurrentRound();
-        const r = Array.isArray(opt) && opt.length > 0 ? opt[0] : null;
-        if (!r) {
-          if (!cancelled) {
-            setMiningRound(null);
-            if (showLoader) {
-              setMiningLoading(false);
-            }
-          }
-          return;
-        }
-
-        const startMs = nsToMs((r as any).startTime);
-        const endMs = nsToMs((r as any).endTime);
-        const now = Date.now();
-        let status: 'active' | 'completed' | 'pending' = 'active';
-        if ((r as any).isCompleted) status = 'completed';
-        else if (now < startMs) status = 'pending';
-
-        const participants = Array.isArray((r as any).activeUsers) ? (r as any).activeUsers.length : 0;
-        const totalMined = toNum((r as any).totalMined);
-        const progress = endMs && startMs
-          ? Math.min(100, Math.max(0, ((now - startMs) / (endMs - startMs)) * 100))
-          : 0;
-
-        const round: MiningRound = {
-          id: toNum((r as any).id),
-          status,
-          startTime: startMs,
-          endTime: endMs,
-          participants,
-          totalMined,
-          progress,
-          timeRemaining: formatTimeRemaining(endMs),
-        };
-
-        if (!cancelled) {
-          setMiningRound(round);
-        }
-      } catch (err) {
-        console.error('Failed to load mining round:', err);
-        error('Mining Error', 'Failed to load current mining round data.');
-        if (!cancelled) {
-          setMiningRound(null);
-        }
-      } finally {
-        if (!cancelled && showLoader) {
-          setMiningLoading(false);
-        }
-      }
-    };
-
-    // Initial load - show loader
-    fetchMiningRound(true);
-
-    // Update time remaining every second (only if app is active)
-    const timeInterval = setInterval(() => {
-      if (miningRound && appStateManager.isActive()) {
-        setMiningRound((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            timeRemaining: formatTimeRemaining(prev.endTime),
-            progress: Math.min(100, Math.max(0, ((Date.now() - prev.startTime) / (prev.endTime - prev.startTime)) * 100)),
-          };
-        });
-      }
-    }, 1000);
-
-    // Refresh mining round every 30 seconds (reduced frequency, silently, no loader)
-    const refreshInterval = setInterval(() => {
-      if (appStateManager.isActive()) {
-        fetchMiningRound(false);
-      }
-    }, 30000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timeInterval);
-      clearInterval(refreshInterval);
-    };
-  }, []);
-
-  // Fetch caller text (optimized - less frequent, only when active)
-  useEffect(() => {
-    let cancelled = false;
-
-    const fetchCallerText = async () => {
-      // Skip if app is in background
-      if (!appStateManager.isActive()) {
-        return;
-      }
-
-      // Only fetch if we have an identity (so we can identify the caller)
-      const identity = getIdentity();
-      if (!identity) {
-        if (!cancelled) {
-          setCallerTextLoading(false);
-          setCallerText(null);
-        }
-        return;
-      }
-
-      try {
-        setCallerTextLoading(true);
-
-        // Create agent with identity to get the actual caller information
-        const host = getHost();
-        const isDevelopment = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
-        const agent = new HttpAgent({
-          host,
-          identity,
-          fetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-        });
-
-        if (isDevelopment) {
-          await agent.fetchRootKey();
-        }
-
-        // Create actor with identity
-        const mainActor = getBikeraMainActor({ agent });
-        const text = await mainActor.getCallerText();
-
-        if (!cancelled) {
-          setCallerText(text);
-        }
-      } catch (err) {
-        console.error('Failed to load caller text:', err);
-        // Don't show error toast on background refresh
-        if (appStateManager.isActive()) {
-          error('Connection Error', 'Failed to communicate with the IC network.');
-        }
-        if (!cancelled) {
-          setCallerText(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setCallerTextLoading(false);
-        }
-      }
-    };
-
-    fetchCallerText();
-
-    // Refresh caller text every 60 seconds (reduced frequency)
-    const interval = setInterval(() => {
-      if (appStateManager.isActive()) {
-        fetchCallerText();
-      }
-    }, 60000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [principal]); // Re-fetch when principal changes
+  }, [dashboardData]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -488,12 +249,14 @@ export function DashboardScreen() {
       }
     >
       <SectionHeader
-        title={`${greeting}, ${displayName || username || 'Biker'}`}
-        subtitle={principal ? `ID: ${principal.slice(0, 10)}…` : undefined}
+        title={`${greeting}, ${displayName || username || (isGuest ? 'Guest' : 'Biker')}`}
+        subtitle={principal ? `ID: ${principal.slice(0, 10)}…` : isGuest ? 'Exploring without signing in' : undefined}
       />
 
+      <GuestBanner message="Home, Track, Friends, History, and More all work. Sign in is at the top of More if you want to save rides and rewards." />
+
       <View style={styles.content}>
-        {loading ? (
+        {dashboardLoading && principal ? (
           <LoadingBlock message="Loading stats…" color={colors.brandBlue100} />
         ) : principal && !dashboardData ? (
           <View style={styles.errorContainer}>
@@ -505,6 +268,7 @@ export function DashboardScreen() {
           <StatsHero
             distance={formattedDistance}
             xp={formattedXP}
+            imera={formattedImera}
           />
         )}
 
@@ -513,32 +277,37 @@ export function DashboardScreen() {
           <QuickActions actions={quickActions} />
         </View>
 
-        <View style={styles.miningCard}>
-          <Text style={styles.sectionTitle}>Ready to ride</Text>
-          <Text style={styles.miningInfo}>
-            Track a ride, check your balance, and climb the leaderboard with friends.
-          </Text>
-          <PrimaryButton label="Start tracking" onPress={() => navigation.navigate('Track')} style={styles.retryButton} />
-        </View>
-
-        <View style={styles.callerTextCard}>
-          <Text style={styles.sectionTitle}>Caller Information</Text>
-          {callerTextLoading ? (
-            <View style={styles.callerTextLoadingContainer}>
-              <ThreeDotLoader color={colors.brandBlue100} size="small" />
-              <Text style={styles.callerTextLoadingText}>Loading caller text...</Text>
+        <Pressable
+          onPress={() => navigation.navigate('Track')}
+          style={({ pressed }) => [styles.rideCard, pressed && styles.rideCardPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Start tracking a ride"
+        >
+          <LinearGradient
+            colors={[colors.brandIndigo, colors.brandPurple, colors.brandBlue200]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.rideGradient}
+          >
+            <View style={styles.rideTop}>
+              <View style={styles.rideIcon}>
+                <Ionicons name="bicycle" size={24} color="#0B1220" />
+              </View>
+              <View style={styles.rideCopy}>
+                <Text style={styles.rideTitle}>Ready to ride</Text>
+                <Text style={styles.rideSubtitle}>
+                  {isGuest
+                    ? 'Track locally as a guest. Sign in later to save rides to your account.'
+                    : 'Open GPS tracking and start earning as you move.'}
+                </Text>
+              </View>
             </View>
-          ) : callerText ? (
-            <View style={styles.callerTextContainer}>
-              <Text style={styles.callerTextLabel}>Caller Text:</Text>
-              <Text style={styles.callerTextValue}>{callerText}</Text>
+            <View style={styles.rideButton}>
+              <Text style={styles.rideButtonText}>Start tracking</Text>
+              <Ionicons name="arrow-forward" size={18} color="#0B1220" />
             </View>
-          ) : (
-            <View style={styles.callerTextEmptyContainer}>
-              <Text style={styles.callerTextEmptyText}>No caller text available</Text>
-            </View>
-          )}
-        </View>
+          </LinearGradient>
+        </Pressable>
       </View>
     </Screen>
   );
@@ -598,6 +367,60 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
+  },
+  rideCard: {
+    marginTop: 24,
+    borderRadius: 24,
+  },
+  rideCardPressed: {
+    opacity: 0.9,
+  },
+  rideGradient: {
+    borderRadius: 24,
+    padding: 20,
+  },
+  rideTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  rideIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  rideCopy: {
+    flex: 1,
+  },
+  rideTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  rideSubtitle: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  rideButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rideButtonText: {
+    color: '#0B1220',
+    fontSize: 16,
+    fontWeight: '800',
+    marginRight: 8,
   },
   miningLoadingContainer: {
     paddingVertical: 20,
@@ -704,47 +527,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     lineHeight: 18,
-  },
-  callerTextCard: {
-    marginTop: 24,
-    backgroundColor: 'rgba(6, 7, 23, 0.6)', // Glass-like surface
-    borderRadius: 24,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  callerTextLoadingContainer: {
-    paddingVertical: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  callerTextLoadingText: {
-    color: colors.textSecondary,
-    marginTop: 8,
-    fontSize: 13,
-  },
-  callerTextContainer: {
-    paddingVertical: 12,
-  },
-  callerTextLabel: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  callerTextValue: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    lineHeight: 20,
-    fontFamily: 'monospace',
-  },
-  callerTextEmptyContainer: {
-    paddingVertical: 20,
-    alignItems: 'center',
-  },
-  callerTextEmptyText: {
-    color: colors.textMuted,
-    fontSize: 13,
   },
 });
 
