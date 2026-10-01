@@ -8,6 +8,9 @@ import { DelegationIdentity, DelegationChain } from '@dfinity/identity';
 import { Alert } from 'react-native';
 import { II_DERIVATION_ORIGIN } from '../config';
 import { dataCache } from '../services/dataCache';
+import { appStateManager } from '../services/appStateManager';
+import { startupGate } from '../services/startupGate';
+import { rideAutoStart } from '../services/rideAutoStart';
 
 // Internet Identity canister ID - use production ID or fallback
 // In React Native, process.env may not be available, so we use a fallback
@@ -121,6 +124,7 @@ const STORAGE_PRINCIPAL = 'bikera_principal_v1';
 const STORAGE_USERNAME = 'bikera_username_v1';
 const STORAGE_EMAIL = 'bikera_email_v1';
 const STORAGE_GUEST = 'bikera_guest_v1';
+const STORAGE_REGISTERED = 'bikera_registered_v1';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -181,11 +185,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const checkAuthStatus = useCallback(async (client?: AuthClient) => {
+  const checkAuthStatus = useCallback(async (
+    client?: AuthClient,
+    options?: { silent?: boolean }
+  ) => {
     const auth = client || authClient;
+    const silent = options?.silent === true;
     
     try {
-      setCheckingAuth(true);
+      if (!silent) {
+        setCheckingAuth(true);
+      }
       
       // First, try to restore DelegationIdentity from storage (React Native bridge approach)
       try {
@@ -223,18 +233,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 // Date.now() returns milliseconds since epoch
                 const nowNs = BigInt(Date.now()) * BigInt(1_000_000);
                 isValid = expirationNs > nowNs;
-                if (!isValid) {
-                  console.log('[AUTH] Delegation expired:', {
-                    expiration: expirationNs.toString(),
-                    now: nowNs.toString(),
-                    delegationsCount: delegations.length
-                  });
-                } else {
-                  console.log('[AUTH] Delegation still valid, expires in:', {
-                    expiration: expirationNs.toString(),
-                    now: nowNs.toString(),
-                    remainingNs: (expirationNs - nowNs).toString()
-                  });
+                if (!isValid && __DEV__) {
+                  console.log('[AUTH] Delegation expired');
                 }
               } catch (expErr) {
                 console.warn('[AUTH] Error checking expiration:', expErr);
@@ -246,18 +246,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (isValid) {
               setDelegatedIdentity(identity);
               setPrincipal(storedPrincipal);
-              console.log('[AUTH] Restored DelegationIdentity from storage');
+              if (!silent && __DEV__) {
+                console.log('[AUTH] Restored DelegationIdentity from storage');
+              }
               
-              // Load cached data
+              // Restore profile gate from disk; warm only Home critical cache
               try {
-                const [cachedUsername, cachedEmail] = await Promise.all([
-                  AsyncStorage.getItem(STORAGE_USERNAME),
-                  AsyncStorage.getItem(STORAGE_EMAIL),
+                const [[, cachedUsername], [, cachedRegistered]] = await AsyncStorage.multiGet([
+                  STORAGE_USERNAME,
+                  STORAGE_REGISTERED,
                 ]);
                 if (cachedUsername) setUsername(cachedUsername);
+                if (cachedRegistered === '1' || !!cachedUsername) {
+                  setIsRegistered(true);
+                }
+                void dataCache.warm([{ type: 'dashboard', identifier: storedPrincipal }]);
+                startupGate.start(3500);
               } catch {}
               
-              setCheckingAuth(false);
+              if (!silent) setCheckingAuth(false);
               return;
             } else {
               console.log('[AUTH] Delegation expired, clearing storage');
@@ -282,11 +289,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           
           // Load cached data
           try {
-            const [cachedUsername, cachedEmail] = await Promise.all([
-              AsyncStorage.getItem(STORAGE_USERNAME),
-              AsyncStorage.getItem(STORAGE_EMAIL),
+            const [[, cachedUsername], [, cachedRegistered]] = await AsyncStorage.multiGet([
+              STORAGE_USERNAME,
+              STORAGE_REGISTERED,
             ]);
             if (cachedUsername) setUsername(cachedUsername);
+            if (cachedRegistered === '1' || !!cachedUsername) {
+              setIsRegistered(true);
+            }
+            void dataCache.warm([{ type: 'dashboard', identifier: p }]);
+            startupGate.start(3500);
           } catch {}
         } else {
           setPrincipal(null);
@@ -312,34 +324,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(STORAGE_PRINCIPAL),
           AsyncStorage.getItem(STORAGE_GUEST),
         ]);
-        setIsGuest(!storedPrincipal && guestFlag === '1');
+        const guest = !storedPrincipal && guestFlag === '1';
+        setIsGuest(guest);
+        if (guest) {
+          startupGate.unlock('guest');
+        }
       } catch {
         // ignore guest restore errors
       }
-      setCheckingAuth(false);
+      if (!silent) {
+        setCheckingAuth(false);
+      }
     }
   }, [authClient]);
 
-  // Poll for auth status changes (only when authenticated)
+  // Silent expiry check when app returns to foreground (no 2s poll)
   useEffect(() => {
-    if (!authClient) return;
-    
-    // Only poll if we think we're authenticated, otherwise check once
-    const checkOnce = async () => {
-      await checkAuthStatus();
-    };
-    
-    checkOnce();
-    
-    // Only set up polling if authenticated
-    if (principal) {
-      const interval = setInterval(() => {
-        checkAuthStatus();
-      }, 2000);
-      
-      return () => clearInterval(interval);
+    if (!authClient) {
+      void checkAuthStatus();
+      return undefined;
     }
-  }, [authClient, checkAuthStatus, principal]);
+    void checkAuthStatus();
+    const onForeground = () => {
+      void checkAuthStatus(undefined, { silent: true });
+    };
+    appStateManager.on('foreground', onForeground);
+    return () => {
+      appStateManager.off('foreground', onForeground);
+    };
+  }, [authClient, checkAuthStatus]);
 
   const enterGuestMode = useCallback(async () => {
     try {
@@ -348,6 +361,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsGuest(true);
     setCheckingAuth(false);
     setIsLoggingIn(false);
+    startupGate.unlock('guest');
   }, []);
 
   const exitGuestMode = useCallback(async () => {
@@ -806,6 +820,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsRegistered(null);
       setDelegatedIdentity(null);
       setIsGuest(false);
+      startupGate.reset();
+      rideAutoStart.resetSession();
 
       if (authClient) {
         await authClient.logout();
@@ -815,6 +831,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         AsyncStorage.removeItem(STORAGE_PRINCIPAL),
         AsyncStorage.removeItem(STORAGE_USERNAME),
         AsyncStorage.removeItem(STORAGE_EMAIL),
+        AsyncStorage.removeItem(STORAGE_REGISTERED),
         AsyncStorage.removeItem('bikera_delegation'),
         AsyncStorage.removeItem('bikera_session_key'),
         AsyncStorage.removeItem(STORAGE_GUEST),
@@ -838,7 +855,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.removeItem(STORAGE_PRINCIPAL);
       await AsyncStorage.removeItem(STORAGE_USERNAME);
       await AsyncStorage.removeItem(STORAGE_EMAIL);
+      await AsyncStorage.removeItem(STORAGE_REGISTERED);
       await dataCache.clear();
+      startupGate.reset();
+      rideAutoStart.resetSession();
       setPrincipal(null);
       setUsername(null);
       setIsRegistered(null);
@@ -854,6 +874,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const setRegistrationStatus = useCallback(async (registered: boolean, usernameValue?: string, emailValue?: string) => {
     setIsRegistered(registered);
+    try {
+      await AsyncStorage.setItem(STORAGE_REGISTERED, registered ? '1' : '0');
+    } catch {}
     if (usernameValue) {
       setUsername(usernameValue);
       try {

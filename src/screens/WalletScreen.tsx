@@ -138,6 +138,9 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
     identifier: principal || undefined,
     fetcher: fetchWalletData,
     enabled: !!principal,
+    tier: 'normal',
+    refetchOnForeground: false,
+    minRefetchIntervalMs: 60_000,
   });
 
   const handleRefresh = useCallback(async () => {

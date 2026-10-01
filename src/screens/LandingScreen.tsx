@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Text, View, StyleSheet, Pressable, Image } from 'react-native';
+import { Text, View, StyleSheet, Image } from 'react-native';
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
 import { SectionHeader } from '../components/SectionHeader';
@@ -13,6 +13,7 @@ import { getBikeraUserActor } from '../utils/actors';
 import { Principal } from '@dfinity/principal';
 import { ThreeDotLoader } from '../components/ThreeDotLoader';
 import { useToastHelpers } from '../contexts/ToastContext';
+import { PressableScale } from '../components/motion';
 
 export function LandingScreen() {
   const {
@@ -140,14 +141,15 @@ export function LandingScreen() {
                 Use your Internet Identity passkey. If Samsung Pass opens, pick that passkey — not a website password. Tap X if the page stays blank.
               </Text>
 
-              <Pressable
+              <PressableScale
                 onPress={() => { void enterGuestMode(); }}
-                style={({ pressed }) => [styles.guestLink, pressed && styles.buttonPressed]}
+                style={styles.guestLink}
+                scaleTo={0.97}
                 accessibilityRole="button"
                 accessibilityLabel="Continue as guest without signing in"
               >
                 <Text style={styles.guestLinkText}>Continue as guest</Text>
-              </Pressable>
+              </PressableScale>
             </View>
           ) : checkingProfile ? (
             <View style={styles.loadingContainer}>
@@ -167,17 +169,15 @@ export function LandingScreen() {
               <Text style={styles.registerPromptText}>
                 You're almost there! Complete your registration to start earning.
               </Text>
-              <Pressable
+              <PressableScale
                 onPress={() => setShowRegisterModal(true)}
-                style={({ pressed }) => [
-                  styles.registerButton,
-                  pressed && styles.registerButtonPressed,
-                ]}
+                style={styles.registerButton}
+                scaleTo={0.96}
               >
                 <Text style={styles.registerButtonText}>
                   {checkingProfile ? 'Checking…' : 'Complete Registration'}
                 </Text>
-              </Pressable>
+              </PressableScale>
             </View>
           )}
         </View>

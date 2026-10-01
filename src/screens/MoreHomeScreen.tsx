@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, Text, View, StyleSheet, Dimensions } from 'react-native';
+import { Text, View, StyleSheet, Dimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { ConnectIIButton } from '../components/ConnectIIButton';
+import { PressableScale, FadeInView } from '../components/motion';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, radii, shadows } from '../theme/tokens';
 
@@ -27,7 +28,7 @@ const SECTIONS: { label: string; items: MenuItem[] }[] = [
   {
     label: 'Progress',
     items: [
-      { title: 'Leaderboard', icon: 'trophy', to: 'Leaderboard', color: colors.brandBlue300, subtitle: 'See top riders' },
+      { title: 'History', icon: 'time', to: 'History', color: colors.brandBlue300, subtitle: 'Past rides and XP' },
       { title: 'Wallet', icon: 'wallet', to: 'Wallet', color: colors.brandPurple, subtitle: 'Balances and rewards' },
     ],
   },
@@ -48,9 +49,10 @@ function MenuCard({
   onPress: () => void;
 }) {
   return (
-    <Pressable
+    <PressableScale
       onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      style={styles.card}
+      scaleTo={0.96}
       accessibilityLabel={item.title}
       accessibilityRole="button"
     >
@@ -77,7 +79,7 @@ function MenuCard({
           <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
         </View>
       </LinearGradient>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -87,66 +89,68 @@ export function MoreHomeScreen() {
 
   return (
     <Screen>
-      <SectionHeader title="More" subtitle="Wallet, leaderboard, and profile." />
+      <SectionHeader title="More" subtitle="History, wallet, and profile." />
 
       <View style={styles.content}>
-        {/* Profile summary card */}
-        <LinearGradient
-          colors={['rgba(66,192,251,0.22)', 'rgba(26,159,224,0.10)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.profileCard}
-        >
-          <View style={styles.profileRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarInitial}>
-                {(username || 'B').slice(0, 1).toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.profileTextCol}>
-              <Text style={styles.profileTitle}>{username || (isGuest ? 'Guest' : 'Rider')}</Text>
-              {principal ? (
-                <Text style={styles.profileSubtitle}>
-                  {principal.slice(0, 5)}…{principal.slice(-4)}
+        <FadeInView variant="up">
+          <LinearGradient
+            colors={['rgba(66,192,251,0.22)', 'rgba(26,159,224,0.10)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.profileCard}
+          >
+            <View style={styles.profileRow}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarInitial}>
+                  {(username || 'B').slice(0, 1).toUpperCase()}
                 </Text>
-              ) : isGuest ? (
-                <Text style={styles.profileSubtitle}>Exploring without signing in</Text>
-              ) : null}
+              </View>
+              <View style={styles.profileTextCol}>
+                <Text style={styles.profileTitle}>{username || (isGuest ? 'Guest' : 'Rider')}</Text>
+                {principal ? (
+                  <Text style={styles.profileSubtitle}>
+                    {principal.slice(0, 5)}…{principal.slice(-4)}
+                  </Text>
+                ) : isGuest ? (
+                  <Text style={styles.profileSubtitle}>Exploring without signing in</Text>
+                ) : null}
+              </View>
             </View>
-          </View>
-          <View style={styles.profileStatsRow}>
-            <View style={styles.profileStat}>
-              <Text style={styles.profileStatLabel}>Status</Text>
-              <Text style={styles.profileStatValue}>{isGuest ? 'Guest' : 'Connected'}</Text>
+            <View style={styles.profileStatsRow}>
+              <View style={styles.profileStat}>
+                <Text style={styles.profileStatLabel}>Status</Text>
+                <Text style={styles.profileStatValue}>{isGuest ? 'Guest' : 'Connected'}</Text>
+              </View>
+              <View style={styles.profileStatDivider} />
+              <View style={styles.profileStat}>
+                <Text style={styles.profileStatLabel}>Mode</Text>
+                <Text style={styles.profileStatValue}>Mobile app</Text>
+              </View>
             </View>
-            <View style={styles.profileStatDivider} />
-            <View style={styles.profileStat}>
-              <Text style={styles.profileStatLabel}>Mode</Text>
-              <Text style={styles.profileStatValue}>Mobile app</Text>
-            </View>
-          </View>
-        </LinearGradient>
+          </LinearGradient>
+        </FadeInView>
 
         {isGuest ? (
-          <View style={styles.connectSection}>
+          <FadeInView delay={60} style={styles.connectSection}>
             <Text style={styles.sectionLabel}>Sign in</Text>
             <Text style={styles.connectCopy}>
               Save rides, XP, and iMERA to your Internet Identity. Guest browsing stays available.
             </Text>
             <ConnectIIButton />
-            <Pressable
+            <PressableScale
               onPress={() => { void exitGuestMode(); }}
-              style={({ pressed }) => [styles.loginScreenLink, pressed && { opacity: 0.8 }]}
+              style={styles.loginScreenLink}
+              scaleTo={0.97}
               accessibilityRole="button"
               accessibilityLabel="Go to login screen"
             >
               <Text style={styles.loginScreenLinkText}>Go to login screen</Text>
-            </Pressable>
-          </View>
+            </PressableScale>
+          </FadeInView>
         ) : null}
 
-        {SECTIONS.map((section) => (
-          <View key={section.label} style={styles.section}>
+        {SECTIONS.map((section, sectionIndex) => (
+          <FadeInView key={section.label} variant="down" delay={80 + sectionIndex * 60} style={styles.section}>
             <Text style={styles.sectionLabel}>{section.label}</Text>
             <View style={styles.grid}>
               {section.items.map((item) => (
@@ -159,14 +163,15 @@ export function MoreHomeScreen() {
                 />
               ))}
             </View>
-          </View>
+          </FadeInView>
         ))}
 
         {isGuest ? null : (
-          <View style={styles.logoutSection}>
-            <Pressable
+          <FadeInView delay={220} style={styles.logoutSection}>
+            <PressableScale
               onPress={() => logout()}
-              style={({ pressed }) => [styles.logoutButton, pressed && styles.logoutPressed]}
+              style={styles.logoutButton}
+              scaleTo={0.97}
               accessibilityLabel="Log out"
               accessibilityRole="button"
             >
@@ -177,8 +182,8 @@ export function MoreHomeScreen() {
                 <Text style={styles.logoutText}>Log out</Text>
                 <Ionicons name="chevron-forward" size={18} color={colors.error} />
               </View>
-            </Pressable>
-          </View>
+            </PressableScale>
+          </FadeInView>
         )}
       </View>
     </Screen>
@@ -281,9 +286,6 @@ const styles = StyleSheet.create({
     ...shadows.soft,
     marginBottom: 2,
   },
-  cardPressed: {
-    opacity: 0.92,
-  },
   cardGradient: {
     paddingVertical: 14,
     paddingHorizontal: 14,
@@ -357,9 +359,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239, 68, 68, 0.06)',
     paddingVertical: 10,
     paddingHorizontal: 14,
-  },
-  logoutPressed: {
-    opacity: 0.9,
   },
   logoutRow: {
     flexDirection: 'row',

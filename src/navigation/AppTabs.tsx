@@ -1,31 +1,44 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { View, StyleSheet, Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
-import { StyleSheet, Platform, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CommonActions } from '@react-navigation/native';
 
 import type { AppTabsParamList, MoreStackParamList } from './types';
-import { colors } from '../theme/tokens';
+import { AnimatedTabBar } from '../components/AnimatedTabBar';
+import { rideAutoStart } from '../services/rideAutoStart';
 
 const getDashboardScreen = () => require('../screens/DashboardScreen').DashboardScreen;
 const getTrackScreen = () => require('../screens/TrackScreen').TrackScreen;
 const getFriendsScreen = () => require('../screens/FriendsScreen').FriendsScreen;
+const getLeaderboardScreen = () => require('../screens/LeaderboardScreen').LeaderboardScreen;
 const getHistoryScreen = () => require('../screens/HistoryScreen').HistoryScreen;
 const getMoreHomeScreen = () => require('../screens/MoreHomeScreen').MoreHomeScreen;
-const getLeaderboardScreen = () => require('../screens/LeaderboardScreen').LeaderboardScreen;
 const getWalletScreen = () => require('../screens/WalletScreen').WalletScreen;
 const getProfileScreen = () => require('../screens/ProfileScreen').ProfileScreen;
 
 const Tab = createBottomTabNavigator<AppTabsParamList>();
 const MoreStack = createNativeStackNavigator<MoreStackParamList>();
 
+const stackAnimation = Platform.select({
+  ios: 'default' as const,
+  android: 'slide_from_right' as const,
+  default: 'fade_from_bottom' as const,
+});
+
 function MoreStackNavigator() {
   return (
-    <MoreStack.Navigator screenOptions={{ headerShown: false }}>
+    <MoreStack.Navigator
+      screenOptions={{
+        headerShown: false,
+        animation: stackAnimation,
+        animationDuration: 280,
+        gestureEnabled: true,
+        contentStyle: { backgroundColor: '#000000' },
+      }}
+    >
       <MoreStack.Screen name="MoreHome" getComponent={getMoreHomeScreen} />
-      <MoreStack.Screen name="Leaderboard" getComponent={getLeaderboardScreen} />
+      <MoreStack.Screen name="History" getComponent={getHistoryScreen} />
       <MoreStack.Screen name="Wallet" getComponent={getWalletScreen} />
       <MoreStack.Screen name="Profile" getComponent={getProfileScreen} />
     </MoreStack.Navigator>
@@ -33,96 +46,71 @@ function MoreStackNavigator() {
 }
 
 export function AppTabs() {
-  const insets = useSafeAreaInsets();
-  const baseHeight = 64;
-  const tabBarHeight = baseHeight + insets.bottom;
+  const [bootReady, setBootReady] = useState(false);
+  const [initialRoute, setInitialRoute] = useState<keyof AppTabsParamList>('Dashboard');
 
-  const iconFor = (routeName: string, focused: boolean) => {
-    switch (routeName) {
-      case 'Dashboard':
-        return focused ? 'home' : 'home-outline';
-      case 'Track':
-        return focused ? 'navigate' : 'navigate-outline';
-      case 'Friends':
-        return focused ? 'people' : 'people-outline';
-      case 'History':
-        return focused ? 'time' : 'time-outline';
-      case 'More':
-        return focused ? 'grid' : 'grid-outline';
-      default:
-        return focused ? 'ellipse' : 'ellipse-outline';
-    }
-  };
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const openTrack = await rideAutoStart.armSessionLaunch();
+      if (cancelled) return;
+      setInitialRoute(openTrack ? 'Track' : 'Dashboard');
+      setBootReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!bootReady) {
+    return <View style={styles.boot} />;
+  }
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
+      key={initialRoute}
+      initialRouteName={initialRoute}
+      tabBar={(props) => <AnimatedTabBar {...props} />}
+      detachInactiveScreens
+      screenOptions={{
         headerShown: false,
         freezeOnBlur: true,
         lazy: true,
-        tabBarActiveTintColor: colors.brandPurple,
-        tabBarInactiveTintColor: colors.textTertiary,
-        tabBarAccessibilityLabel:
-          route.name === 'Dashboard' ? 'Home' :
-          route.name === 'Track' ? 'Track ride' :
-          route.name === 'Friends' ? 'Friends' :
-          route.name === 'History' ? 'Ride history' :
-          route.name === 'More' ? 'More' : route.name,
-        tabBarStyle: {
-          backgroundColor: colors.surface2,
-          borderTopWidth: 1,
-          borderTopColor: colors.border2,
-          height: tabBarHeight,
-          paddingTop: 6,
-          paddingBottom: Math.max(insets.bottom, 8),
-          ...(Platform.OS === 'ios'
-            ? {
-                shadowColor: '#000',
-                shadowOpacity: 0.12,
-                shadowRadius: 8,
-                shadowOffset: { width: 0, height: -2 },
-              }
-            : {
-                elevation: 8,
-              }
-          ),
+        animation: 'fade',
+        transitionSpec: {
+          animation: 'timing',
+          config: {
+            duration: 220,
+          },
         },
-        tabBarItemStyle: {
-          paddingTop: 2,
-        },
-        tabBarIconStyle: {
-          marginTop: 0,
-        },
-        tabBarShowLabel: true,
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
-          marginTop: 2,
-        },
-        tabBarLabel:
-          route.name === 'Dashboard' ? 'Home' :
-          route.name === 'Track' ? 'Track' :
-          route.name === 'Friends' ? 'Friends' :
-          route.name === 'History' ? 'History' :
-          route.name === 'More' ? 'More' : route.name,
-        tabBarIcon: ({ color, focused }) => (
-          <View style={[styles.iconWrap, focused && styles.iconWrapFocused]}>
-            <Ionicons
-              name={iconFor(route.name, focused) as any}
-              size={22}
-              color={focused ? colors.brandPurple : color}
-            />
-          </View>
-        ),
-      })}
+        sceneStyle: { backgroundColor: '#000000' },
+        tabBarHideOnKeyboard: true,
+      }}
     >
-      <Tab.Screen name="Dashboard" getComponent={getDashboardScreen} />
-      <Tab.Screen name="Track" getComponent={getTrackScreen} />
-      <Tab.Screen name="Friends" getComponent={getFriendsScreen} />
-      <Tab.Screen name="History" getComponent={getHistoryScreen} />
+      <Tab.Screen
+        name="Dashboard"
+        getComponent={getDashboardScreen}
+        options={{ tabBarAccessibilityLabel: 'Home' }}
+      />
+      <Tab.Screen
+        name="Track"
+        getComponent={getTrackScreen}
+        options={{ freezeOnBlur: false, tabBarAccessibilityLabel: 'Track ride' }}
+      />
+      <Tab.Screen
+        name="Friends"
+        getComponent={getFriendsScreen}
+        options={{ tabBarAccessibilityLabel: 'Friends' }}
+      />
+      <Tab.Screen
+        name="Leaderboard"
+        getComponent={getLeaderboardScreen}
+        options={{ tabBarAccessibilityLabel: 'Leaderboard' }}
+      />
       <Tab.Screen
         name="More"
         component={MoreStackNavigator}
+        options={{ tabBarAccessibilityLabel: 'More' }}
         listeners={({ navigation }) => ({
           tabPress: () => {
             navigation.dispatch(
@@ -139,14 +127,8 @@ export function AppTabs() {
 }
 
 const styles = StyleSheet.create({
-  iconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  iconWrapFocused: {
-    backgroundColor: 'rgba(66, 192, 251, 0.16)',
+  boot: {
+    flex: 1,
+    backgroundColor: '#000000',
   },
 });

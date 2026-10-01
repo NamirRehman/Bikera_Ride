@@ -9,6 +9,8 @@ import { createActor as createBikeraXpActor } from "../declarations/bikera_xp";
 import { createActor as createBikeraRewardsActor } from "../declarations/bikera_rewards";
 import { createActor as createBikeraImeraActor } from "../declarations/bikera_imera";
 import { createActor as createBikeraPoolsActor } from "../declarations/bikera_pools";
+import { createActor as createBikeraBridgeActor } from "../declarations/bikera_bridge";
+import { createActor as createBikeraConsensusActor } from "../declarations/bikera_consensus";
 
 // Import CreateActorOptions type for proper typing
 import type { CreateActorOptions } from "../declarations/bikera_main";

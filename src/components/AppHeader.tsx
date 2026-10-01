@@ -1,8 +1,9 @@
 import React, { memo } from 'react';
-import { View, Text, StyleSheet, Pressable, Image } from 'react-native';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/tokens';
 import { useNavigation } from '@react-navigation/native';
+import { PressableScale } from './motion';
 
 export const AppHeader = memo(function AppHeader() {
     const navigation = useNavigation<any>();
@@ -19,32 +20,21 @@ export const AppHeader = memo(function AppHeader() {
 
             {/* Right: Actions */}
             <View style={styles.right}>
-                {/*
-                <Pressable
-                    style={styles.iconButton}
-                    accessibilityLabel="Notifications"
-                    accessibilityRole="button"
-                >
-                    <Ionicons name="notifications-outline" size={24} color={colors.textSecondary} />
-                    <View style={styles.notificationDot} />
-                </Pressable>
-                */}
-
-                <Pressable
+                <PressableScale
                     onPress={() => navigation.navigate('More', { screen: 'Profile' })}
                     style={styles.avatarButton}
+                    scaleTo={0.92}
                     accessibilityLabel="Profile"
                     accessibilityRole="button"
                 >
                     <View style={styles.avatarFallback}>
                         <Ionicons name="person" size={16} color="#fff" />
                     </View>
-                </Pressable>
+                </PressableScale>
             </View>
         </View>
     );
 });
-
 const styles = StyleSheet.create({
     container: {
         flexDirection: 'row',

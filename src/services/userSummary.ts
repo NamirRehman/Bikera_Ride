@@ -2,6 +2,7 @@ import { Principal } from '@dfinity/principal';
 import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
 import { dataCache } from './dataCache';
 import { requestDeduplicator, createRequestKey } from './requestDeduplicator';
+import { parseCountryFromBio } from './userCountry';
 
 export interface PublicUserSummary {
   userId: string;
@@ -11,6 +12,8 @@ export interface PublicUserSummary {
   distance: number;
   avatar?: string;
   lastActivity?: number;
+  country?: string;
+  bio?: string;
 }
 
 const CACHE_TYPE = 'userPublic';
@@ -69,6 +72,11 @@ async function fetchAndCacheSummary(userIdText: string): Promise<PublicUserSumma
     const level = xpProfile ? Number(xpProfile.currentLevel || 1n) : 1;
     const distance = xpProfile ? Number(xpProfile.totalDistance || 0n) / 1000 : 0;
     const lastActivity = profile?.lastActivity ? Number(profile.lastActivity) / 1_000_000 : undefined;
+    const bioRaw = profile?.bio;
+    const bio = Array.isArray(bioRaw) && bioRaw.length > 0
+      ? String(bioRaw[0])
+      : (typeof bioRaw === 'string' ? bioRaw : undefined);
+    const country = parseCountryFromBio(bioRaw ?? bio);
 
     const summary: PublicUserSummary = {
       userId: userIdText,
@@ -78,6 +86,8 @@ async function fetchAndCacheSummary(userIdText: string): Promise<PublicUserSumma
       distance,
       avatar,
       lastActivity,
+      country,
+      bio,
     };
 
     await dataCache.set(CACHE_TYPE, summary, userIdText, SUMMARY_TTL_MS);

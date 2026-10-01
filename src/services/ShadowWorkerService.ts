@@ -61,12 +61,15 @@ export interface HealthResponse {
 
 export class ShadowWorkerService {
     private static url = SHADOW_WORKER_URL;
+    /** Cached: Railway returns 404 Application not found when deployment is gone. */
+    private static unavailableUntil = 0;
 
     /**
      * Set worker URL (for testing or custom deployment)
      */
     static setUrl(url: string): void {
         this.url = url;
+        this.unavailableUntil = 0;
     }
 
     /**
@@ -74,6 +77,21 @@ export class ShadowWorkerService {
      */
     static getUrl(): string {
         return this.url;
+    }
+
+    private static isTemporarilyUnavailable(): boolean {
+        return Date.now() < this.unavailableUntil;
+    }
+
+    private static markUnavailable(ttlMs = 5 * 60_000): void {
+        this.unavailableUntil = Date.now() + ttlMs;
+    }
+
+    /** Permanent / infra failures that should not be retried. */
+    private static isNonRetryableWorkerError(status: number, body: string): boolean {
+        if (status === 404 || status === 410 || status === 501 || status === 502) return true;
+        const lower = (body || '').toLowerCase();
+        return lower.includes('application not found') || lower.includes('not found');
     }
 
     /**
@@ -116,6 +134,10 @@ export class ShadowWorkerService {
         userId: string,
         point: GPSPoint
     ): Promise<GPSPointResponse> {
+        if (this.isTemporarilyUnavailable()) {
+            return { success: false, error: 'Shadow worker temporarily unavailable' };
+        }
+
         // Check network connectivity
         if (!networkMonitor.isConnected()) {
             throw new Error('Network not available');
@@ -150,6 +172,15 @@ export class ShadowWorkerService {
 
                         if (!response.ok) {
                             const errorText = await response.text();
+                            if (this.isNonRetryableWorkerError(response.status, errorText)) {
+                                this.markUnavailable();
+                                if (__DEV__) {
+                                    console.warn(
+                                        `[ShadowWorkerService] Worker unavailable (${response.status}) — skipping GPS sends for 5m`
+                                    );
+                                }
+                                return { success: false, error: errorText };
+                            }
                             throw new Error(`Worker error (${response.status}): ${errorText}`);
                         }
 
@@ -164,10 +195,11 @@ export class ShadowWorkerService {
                     }
                 } catch (error) {
                     attempts++;
-                    console.error(`[ShadowWorkerService] GPS point attempt ${attempts}/${maxAttempts} failed:`, error);
-
                     if (attempts >= maxAttempts) {
-                        throw new Error(`Failed to send GPS point after ${maxAttempts} attempts: ${error}`);
+                        if (__DEV__) {
+                            console.warn(`[ShadowWorkerService] GPS point failed after ${maxAttempts} attempts:`, error);
+                        }
+                        return { success: false, error: String(error) };
                     }
 
                     // Wait before retry (exponential backoff)
@@ -177,16 +209,19 @@ export class ShadowWorkerService {
                 }
             }
 
-            throw new Error('Unexpected error in sendGPSPoint');
+            return { success: false, error: 'Unexpected error in sendGPSPoint' };
         });
     }
 
     /**
-     * Flush batch immediately with production optimizations
-     * Forces immediate processing and submission to canister
-     * Includes comprehensive error handling and retry logic
+     * Flush batch immediately with production optimizations.
+     * Soft-fails when Railway worker is missing (404) — ride save continues via canister.
      */
     static async flushBatch(userId: string): Promise<FlushBatchResponse> {
+        if (this.isTemporarilyUnavailable()) {
+            return { success: false, submitted: false, reason: 'worker_unavailable' };
+        }
+
         let attempts = 0;
         const maxAttempts = BATCH_CONFIG.RETRY_ATTEMPTS;
 
@@ -209,16 +244,26 @@ export class ShadowWorkerService {
 
                 if (!response.ok) {
                     const errorText = await response.text();
+                    if (this.isNonRetryableWorkerError(response.status, errorText)) {
+                        this.markUnavailable();
+                        if (__DEV__) {
+                            console.warn(
+                                `[ShadowWorkerService] Flush skipped — worker not deployed (${response.status})`
+                            );
+                        }
+                        return { success: false, submitted: false, reason: 'worker_not_found' };
+                    }
                     throw new Error(`Worker error (${response.status}): ${errorText}`);
                 }
 
                 return await response.json();
             } catch (error) {
                 attempts++;
-                console.error(`[ShadowWorkerService] Flush attempt ${attempts}/${maxAttempts} failed:`, error);
-
                 if (attempts >= maxAttempts) {
-                    throw new Error(`Failed to flush batch after ${maxAttempts} attempts: ${error}`);
+                    if (__DEV__) {
+                        console.warn(`[ShadowWorkerService] Flush failed after ${maxAttempts} attempts:`, error);
+                    }
+                    return { success: false, submitted: false, reason: String(error) };
                 }
 
                 // Wait before retry
@@ -228,7 +273,7 @@ export class ShadowWorkerService {
             }
         }
 
-        throw new Error('Unexpected error in flushBatch');
+        return { success: false, submitted: false, reason: 'unexpected_flush_error' };
     }
 
     /**

@@ -151,6 +151,9 @@ export function PublicProfileScreen() {
     identifier: principalObj ? `${principalParam}:${viewerPrincipalText || 'anon'}` : undefined,
     fetcher: fetchPublicProfile,
     enabled: !!principalObj,
+    tier: 'normal',
+    refetchOnForeground: false,
+    minRefetchIntervalMs: 90_000,
   });
 
   const error = principalObj ? (fetchError ? fetchError.message : null) : 'Invalid principal';

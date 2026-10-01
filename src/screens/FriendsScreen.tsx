@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Pressable, Text, View, StyleSheet, TextInput, Alert, FlatList, Platform, ListRenderItem } from 'react-native';
+import { Pressable, Text, View, StyleSheet, TextInput, Alert, FlatList, ListRenderItem } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,7 +10,7 @@ import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
-import { getBikeraUserActor } from '../utils/actors';
+import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
 import { ThreeDotLoader } from '../components/ThreeDotLoader';
 import { GuestBanner } from '../components/GuestBanner';
 import { useCachedData } from '../hooks/useCachedData';
@@ -48,9 +48,31 @@ interface FriendRequestRaw {
   timestamp: number;
 }
 
+interface DiscoverHit {
+  id: string;
+  username: string;
+  level: number;
+}
+
+function looksLikePrincipal(value: string): boolean {
+  try {
+    Principal.fromText(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function assertCanisterOk(result: any, fallback = 'Request failed'): void {
+  if (result && typeof result === 'object' && 'err' in result) {
+    const err = (result as { err: unknown }).err;
+    throw new Error(typeof err === 'string' ? err : String(err ?? fallback));
+  }
+}
+
 export function FriendsScreen() {
   const navigation = useNavigation<any>();
-  const { principal, isGuest } = useAuth();
+  const { principal, isGuest, getIdentity } = useAuth();
   const [tab, setTab] = useState<Tab>('friends');
   const [searchText, setSearchText] = useState('');
   const [friendIds, setFriendIds] = useState<string[]>([]);
@@ -63,6 +85,9 @@ export function FriendsScreen() {
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({});
   const [sendToId, setSendToId] = useState('');
   const [sending, setSending] = useState(false);
+  const [discoverResults, setDiscoverResults] = useState<DiscoverHit[]>([]);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
 
   const nsToMs = (v: any): number => (typeof v === 'bigint' ? Number(v / 1_000_000n) : Math.floor(Number(v) / 1_000_000));
 
@@ -107,6 +132,9 @@ export function FriendsScreen() {
     identifier: principal || undefined,
     fetcher: fetchFriendsData,
     enabled: !!principal,
+    tier: 'normal',
+    refetchOnForeground: false,
+    minRefetchIntervalMs: 90_000,
   });
 
   useEffect(() => {
@@ -169,13 +197,12 @@ export function FriendsScreen() {
         return;
       }
       setActionBusy((prev) => ({ ...prev, [requestId]: true }));
-      const userActor = getBikeraUserActor();
+      const identity = getIdentity();
+      const userActor = getBikeraUserActor({}, identity);
       const p = Principal.fromText(storedPrincipal);
       const response = await userActor.respondToFriendRequest(requestId, true, p);
-      console.log('[FRIENDS] respondToFriendRequest (accept) response:', JSON.stringify(response, (key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
+      assertCanisterOk(response, 'Failed to accept friend request');
       setRequestItems(prev => prev.filter(r => r.id !== requestId));
-      // Invalidate cache and refetch
       await invalidateFriendsCache(storedPrincipal);
       await refetch();
       Alert.alert('Success', 'Friend request accepted');
@@ -195,13 +222,12 @@ export function FriendsScreen() {
         return;
       }
       setActionBusy((prev) => ({ ...prev, [requestId]: true }));
-      const userActor = getBikeraUserActor();
+      const identity = getIdentity();
+      const userActor = getBikeraUserActor({}, identity);
       const p = Principal.fromText(storedPrincipal);
       const response = await userActor.respondToFriendRequest(requestId, false, p);
-      console.log('[FRIENDS] respondToFriendRequest (reject) response:', JSON.stringify(response, (key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
+      assertCanisterOk(response, 'Failed to reject friend request');
       setRequestItems(prev => prev.filter(r => r.id !== requestId));
-      // Invalidate cache and refetch
       await invalidateFriendsCache(storedPrincipal);
       await refetch();
     } catch (e: any) {
@@ -212,9 +238,14 @@ export function FriendsScreen() {
     }
   };
 
-  const handleSendRequest = async () => {
-    const val = sendToId.trim();
+  const handleSendRequest = async (targetOverride?: string) => {
+    const val = (targetOverride ?? sendToId).trim();
     if (!val) return;
+
+    if (!looksLikePrincipal(val)) {
+      Alert.alert('Invalid principal', 'Paste a valid Internet Identity principal, or pick someone from search results.');
+      return;
+    }
     
     try {
       const storedPrincipal = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
@@ -223,17 +254,17 @@ export function FriendsScreen() {
         return;
       }
       setSending(true);
-      const userActor = getBikeraUserActor();
+      const identity = getIdentity();
+      const userActor = getBikeraUserActor({}, identity);
       const p = Principal.fromText(storedPrincipal);
       const to = Principal.fromText(val);
       const response = await userActor.sendFriendRequest(to, p);
-      console.log('[FRIENDS] sendFriendRequest response:', JSON.stringify(response, (key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
-      // Invalidate cache and refetch
+      assertCanisterOk(response, 'Failed to send friend request');
       await invalidateFriendsCache(storedPrincipal);
       await refetch();
       Alert.alert('Success', 'Friend request sent');
       setSendToId('');
+      setDiscoverResults([]);
     } catch (e: any) {
       console.error('sendFriendRequest failed:', e);
       Alert.alert('Error', e?.message || 'Failed to send friend request');
@@ -292,8 +323,100 @@ export function FriendsScreen() {
   const filteredFriends = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     if (!query) return friendsToRender;
-    return friendsToRender.filter((friend) => friend.username.toLowerCase().includes(query));
-  }, [friendsToRender, searchText]);
+
+    // Search the full friends list (not just the visible page)
+    return friendIds
+      .map((id) => {
+        const summary = summaries[id];
+        const username = summary?.username || id.slice(0, 8);
+        const lastActivity = summary?.lastActivity ?? 0;
+        const hasActivity = lastActivity > 0;
+        const minutesSinceActivity = hasActivity
+          ? (Date.now() - lastActivity) / (1000 * 60)
+          : Number.POSITIVE_INFINITY;
+        const status: 'online' | 'offline' = minutesSinceActivity < 15 ? 'online' : 'offline';
+        return {
+          id,
+          username,
+          level: summary?.level ?? 1,
+          xp: summary?.xp ?? 0,
+          distance: summary?.distance ?? 0,
+          avatar: summary?.avatar,
+          status,
+          lastActive: hasActivity ? formatLastActive(lastActivity) : '—',
+        } satisfies Friend;
+      })
+      .filter(
+        (friend) =>
+          friend.username.toLowerCase().includes(query) ||
+          friend.id.toLowerCase().includes(query)
+      );
+  }, [friendsToRender, searchText, friendIds, summaries]);
+
+  // Load summaries for every friend when searching so username filter works beyond page 1
+  useEffect(() => {
+    const query = searchText.trim();
+    if (!query || tab !== 'friends' || friendIds.length === 0) return;
+    void loadSummaries(friendIds);
+  }, [searchText, tab, friendIds, loadSummaries]);
+
+  // Discover riders by username from the XP leaderboard (no dedicated search canister API)
+  useEffect(() => {
+    const query = searchText.trim();
+    if (tab !== 'friends' || query.length < 2 || looksLikePrincipal(query)) {
+      setDiscoverResults([]);
+      setDiscoverLoading(false);
+      setDiscoverError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        setDiscoverLoading(true);
+        setDiscoverError(null);
+        try {
+          const xpActor = getBikeraXpActor();
+          const rows = await xpActor.getLeaderboard(BigInt(80));
+          const friendSet = new Set(friendIds);
+          const self = principal || '';
+          const hits: DiscoverHit[] = [];
+          const q = query.toLowerCase();
+
+          await runInBatches(rows, SUMMARY_BATCH_SIZE, async ([userId]) => {
+            if (cancelled || hits.length >= 8) return null;
+            const id = userId.toText();
+            if (friendSet.has(id) || id === self) return null;
+            const summary = await fetchPublicUserSummary(userId);
+            if (summary.username.toLowerCase().includes(q)) {
+              hits.push({
+                id,
+                username: summary.username,
+                level: summary.level ?? 1,
+              });
+            }
+            return null;
+          });
+
+          if (!cancelled) {
+            setDiscoverResults(hits);
+          }
+        } catch (e: any) {
+          if (!cancelled) {
+            setDiscoverResults([]);
+            setDiscoverError(e?.message || 'Search failed');
+          }
+        } finally {
+          if (!cancelled) setDiscoverLoading(false);
+        }
+      })();
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchText, tab, friendIds, principal]);
 
   const visibleRequests = useMemo<FriendRequest[]>(() => {
     return requestItems.slice(0, visibleRequestCount).map((request) => {
@@ -411,90 +534,144 @@ export function FriendsScreen() {
     </View>
   ), [actionBusy, handleAcceptRequest, handleRejectRequest, formatTimestamp]);
 
-  const listHeader = (
-    <View style={styles.listHeader}>
-      <SectionHeader title="Friends" subtitle="Connect with other riders" />
-      <GuestBanner compact message="You can browse this screen. Sending or accepting friend requests needs a signed-in account from More." />
-
-      <View style={styles.tabContainer}>
-        <Pressable
-          onPress={() => setTab('friends')}
-          style={[styles.tab, tab === 'friends' && styles.activeTab]}
-        >
-          {tab === 'friends' ? (
-            <LinearGradient
-              colors={[colors.brandPurple, colors.brandBlue300]}
-              style={styles.tabGradient}
-            >
-              <Text style={styles.activeTabText}>Friends ({friendIds.length})</Text>
-            </LinearGradient>
-          ) : (
-            <Text style={styles.tabText}>Friends ({friendIds.length})</Text>
-          )}
-        </Pressable>
-        <Pressable
-          onPress={() => setTab('requests')}
-          style={[styles.tab, tab === 'requests' && styles.activeTab, { position: 'relative' }]}
-        >
-          {tab === 'requests' ? (
-            <LinearGradient
-              colors={[colors.brandPurple, colors.brandBlue300]}
-              style={styles.tabGradient}
-            >
-              <Text style={styles.activeTabText}>Requests</Text>
-            </LinearGradient>
-          ) : (
-            <Text style={styles.tabText}>Requests</Text>
-          )}
-          {requestItems.length > 0 && <View style={styles.notificationDot} />}
-        </Pressable>
-      </View>
-
-      {tab === 'friends' && (
-        <>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color={colors.textTertiary} />
-            <TextInput
-              placeholder="Search friends..."
-              placeholderTextColor={colors.textTertiary}
-              style={styles.searchInput}
-              value={searchText}
-              onChangeText={setSearchText}
-            />
-          </View>
-
-          <View style={styles.sendRequestContainer}>
-            <TextInput
-              placeholder="Enter user Principal to send request"
-              placeholderTextColor={colors.textTertiary}
-              style={styles.sendRequestInput}
-              value={sendToId}
-              onChangeText={setSendToId}
-            />
-            <Pressable
-              onPress={handleSendRequest}
-              disabled={sending || !sendToId.trim()}
-              style={[styles.sendButton, (!sendToId.trim() || sending) && styles.sendButtonDisabled]}
-            >
-              {sending ? (
-                <ThreeDotLoader color="white" size="small" />
-              ) : (
-                <LinearGradient
-                  colors={[colors.brandPurple, colors.brandBlue300]}
-                  style={styles.sendButtonGradient}
-                >
-                  <Text style={styles.sendButtonText}>Send</Text>
-                </LinearGradient>
-              )}
-            </Pressable>
-          </View>
-        </>
-      )}
-    </View>
-  );
+  const emptyMessage = useMemo(() => {
+    if (loading) return null;
+    if (tab !== 'friends') {
+      return { title: 'No pending requests', subtitle: 'New friend requests will appear here' };
+    }
+    if (searchText.trim()) {
+      return {
+        title: discoverLoading ? 'Searching…' : 'No matches',
+        subtitle: isGuest
+          ? 'Sign in from More to add friends.'
+          : 'Try another username, or paste a principal below.',
+      };
+    }
+    if (isGuest) {
+      return {
+        title: 'Explore as guest',
+        subtitle: 'Sign in from More to add friends, or keep using Home and Track.',
+      };
+    }
+    return {
+      title: 'No friends yet',
+      subtitle: 'Search by username above, or paste a principal to send a request.',
+    };
+  }, [loading, tab, searchText, discoverLoading, isGuest]);
 
   return (
-    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen scroll={false} animate={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+      <View style={styles.topSection}>
+        <SectionHeader title="Friends" subtitle="Connect with other riders" />
+        <GuestBanner compact message="You can browse this screen. Sending or accepting friend requests needs a signed-in account from More." />
+
+        <View style={styles.tabContainer}>
+          <Pressable
+            onPress={() => setTab('friends')}
+            style={[styles.tab, tab === 'friends' && styles.activeTab]}
+          >
+            {tab === 'friends' ? (
+              <LinearGradient
+                colors={[colors.brandPurple, colors.brandBlue300]}
+                style={styles.tabGradient}
+              >
+                <Text style={styles.activeTabText}>Friends ({friendIds.length})</Text>
+              </LinearGradient>
+            ) : (
+              <Text style={styles.tabText}>Friends ({friendIds.length})</Text>
+            )}
+          </Pressable>
+          <Pressable
+            onPress={() => setTab('requests')}
+            style={[styles.tab, tab === 'requests' && styles.activeTab, { position: 'relative' }]}
+          >
+            {tab === 'requests' ? (
+              <LinearGradient
+                colors={[colors.brandPurple, colors.brandBlue300]}
+                style={styles.tabGradient}
+              >
+                <Text style={styles.activeTabText}>Requests</Text>
+              </LinearGradient>
+            ) : (
+              <Text style={styles.tabText}>Requests</Text>
+            )}
+            {requestItems.length > 0 && <View style={styles.notificationDot} />}
+          </Pressable>
+        </View>
+
+        {tab === 'friends' && (
+          <>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color={colors.textTertiary} />
+              <TextInput
+                placeholder="Find friends by username…"
+                placeholderTextColor={colors.textTertiary}
+                style={styles.searchInput}
+                value={searchText}
+                onChangeText={setSearchText}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+              {discoverLoading ? <ThreeDotLoader color={colors.brandPurple} size="small" /> : null}
+            </View>
+
+            {discoverResults.length > 0 ? (
+              <View style={styles.discoverBox}>
+                <Text style={styles.discoverTitle}>Riders to add</Text>
+                {discoverResults.map((hit) => (
+                  <View key={hit.id} style={styles.discoverRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.discoverName}>{hit.username}</Text>
+                      <Text style={styles.discoverMeta}>Lvl {hit.level}</Text>
+                    </View>
+                    <Pressable
+                      onPress={() => { void handleSendRequest(hit.id); }}
+                      disabled={sending || isGuest}
+                      style={[styles.discoverAddBtn, (sending || isGuest) && styles.sendButtonDisabled]}
+                    >
+                      <Text style={styles.discoverAddText}>Add</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
+            {discoverError ? (
+              <Text style={styles.discoverError}>{discoverError}</Text>
+            ) : null}
+
+            <View style={styles.sendRequestContainer}>
+              <TextInput
+                placeholder="Or paste principal to send request"
+                placeholderTextColor={colors.textTertiary}
+                style={styles.sendRequestInput}
+                value={sendToId}
+                onChangeText={setSendToId}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              <Pressable
+                onPress={() => { void handleSendRequest(); }}
+                disabled={sending || !sendToId.trim()}
+                style={[styles.sendButton, (!sendToId.trim() || sending) && styles.sendButtonDisabled]}
+              >
+                {sending ? (
+                  <ThreeDotLoader color="white" size="small" />
+                ) : (
+                  <LinearGradient
+                    colors={[colors.brandPurple, colors.brandBlue300]}
+                    style={styles.sendButtonGradient}
+                  >
+                    <Text style={styles.sendButtonText}>Send</Text>
+                  </LinearGradient>
+                )}
+              </Pressable>
+            </View>
+          </>
+        )}
+      </View>
+
       <FlatList<Friend | FriendRequest>
         key={tab}
         data={listData}
@@ -504,25 +681,17 @@ export function FriendsScreen() {
             ? (renderFriendItem as ListRenderItem<Friend | FriendRequest>)
             : (renderRequestItem as ListRenderItem<Friend | FriendRequest>)
         }
-        ListHeaderComponent={listHeader}
         ListEmptyComponent={
           loading ? (
             <View style={styles.loadingContainer}>
               <ThreeDotLoader color={colors.brandPurple} size="large" />
             </View>
-          ) : tab === 'friends' ? (
+          ) : emptyMessage ? (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>{isGuest ? 'Explore as guest' : 'No friends found'}</Text>
-              <Text style={styles.emptySubtext}>
-                {isGuest ? 'Sign in from More to add friends, or keep using Home and Track.' : 'Search for riders to connect with'}
-              </Text>
+              <Text style={styles.emptyText}>{emptyMessage.title}</Text>
+              <Text style={styles.emptySubtext}>{emptyMessage.subtitle}</Text>
             </View>
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No pending requests</Text>
-              <Text style={styles.emptySubtext}>New friend requests will appear here</Text>
-            </View>
-          )
+          ) : null
         }
         ListFooterComponent={
           hasMore ? (
@@ -543,16 +712,22 @@ export function FriendsScreen() {
         onEndReachedThreshold={0.5}
         refreshing={refreshing}
         onRefresh={onRefresh}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         initialNumToRender={tab === 'friends' ? FRIEND_PAGE_SIZE : REQUEST_PAGE_SIZE}
         maxToRenderPerBatch={6}
         windowSize={5}
-        removeClippedSubviews={Platform.OS === 'android' || Platform.OS === 'ios'}
+        removeClippedSubviews={false}
       />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  topSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
   tabContainer: {
     flexDirection: 'row',
     backgroundColor: colors.surfaceCard,
@@ -560,13 +735,58 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     marginBottom: 16,
   },
-  listHeader: {
-    paddingTop: 8,
-  },
   listContent: {
     paddingHorizontal: 16,
     paddingBottom: 40,
     gap: 12,
+    flexGrow: 1,
+  },
+  discoverBox: {
+    backgroundColor: colors.surfaceCard,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border1,
+    padding: 12,
+    marginBottom: 12,
+    gap: 10,
+  },
+  discoverTitle: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  discoverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  discoverName: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  discoverMeta: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  discoverAddBtn: {
+    backgroundColor: colors.brandPurple,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  discoverAddText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  discoverError: {
+    color: colors.error,
+    fontSize: 12,
+    marginBottom: 8,
   },
   tab: {
     flex: 1,

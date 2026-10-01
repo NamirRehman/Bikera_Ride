@@ -16,6 +16,7 @@ import { useCachedData } from '../hooks/useCachedData';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { GuestBanner } from '../components/GuestBanner';
 import { useToastHelpers } from '../contexts/ToastContext';
+import { AnimatedListItem, listItemEntering, PressableScale } from '../components/motion';
 
 interface RideHistory {
   id: string;
@@ -151,6 +152,9 @@ export function HistoryScreen() {
     identifier: principal ? `${principal}:${historyLimit}` : undefined,
     fetcher: fetchHistoryData,
     enabled: !!principal,
+    tier: 'normal',
+    refetchOnForeground: false,
+    minRefetchIntervalMs: 90_000,
   });
 
   // Apply activity type filter to cached data
@@ -249,44 +253,46 @@ export function HistoryScreen() {
 
   const isInitialLoading = loading && rides.length === 0;
 
-  const renderRideItem = useCallback(({ item }: { item: RideHistory }) => (
-    <Card style={styles.rideCard}>
-      <View style={styles.rideHeader}>
-        <View style={styles.rideHeaderLeft}>
-          <View style={[styles.routeIconContainer, { backgroundColor: getRouteColor(item.routeType)[0] + '20' }]}>
-            <Text style={styles.routeIcon}>{getRouteIcon(item.routeType)}</Text>
+  const renderRideItem = useCallback(({ item, index }: { item: RideHistory; index: number }) => (
+    <AnimatedListItem entering={listItemEntering(index)}>
+      <Card style={styles.rideCard}>
+        <View style={styles.rideHeader}>
+          <View style={styles.rideHeaderLeft}>
+            <View style={[styles.routeIconContainer, { backgroundColor: getRouteColor(item.routeType)[0] + '20' }]}>
+              <Text style={styles.routeIcon}>{getRouteIcon(item.routeType)}</Text>
+            </View>
+            <View>
+              <Text style={styles.rideType}>{item.routeType.charAt(0).toUpperCase() + item.routeType.slice(1)} Ride</Text>
+              <Text style={styles.rideDate}>{formatDate(item.date)}</Text>
+            </View>
           </View>
-          <View>
-            <Text style={styles.rideType}>{item.routeType.charAt(0).toUpperCase() + item.routeType.slice(1)} Ride</Text>
-            <Text style={styles.rideDate}>{formatDate(item.date)}</Text>
+          <View style={styles.rideRewards}>
+            <Text style={styles.xpText}>+{item.xpEarned} XP</Text>
+            <Text style={styles.rewardSeparator}>•</Text>
+            <Text style={styles.imeraText}>+{item.imeraEarned.toFixed(1)} iMERA</Text>
           </View>
         </View>
-        <View style={styles.rideRewards}>
-          <Text style={styles.xpText}>+{item.xpEarned} XP</Text>
-          <Text style={styles.rewardSeparator}>•</Text>
-          <Text style={styles.imeraText}>+{item.imeraEarned.toFixed(1)} iMERA</Text>
-        </View>
-      </View>
 
-      <View style={styles.statsGrid}>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Distance</Text>
-          <Text style={styles.statValue}>{item.distance.toFixed(1)} km</Text>
+        <View style={styles.statsGrid}>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Distance</Text>
+            <Text style={styles.statValue}>{item.distance.toFixed(1)} km</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Duration</Text>
+            <Text style={styles.statValue}>{formatDuration(item.duration)}</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Avg Speed</Text>
+            <Text style={styles.statValue}>{item.avgSpeed.toFixed(1)} km/h</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Max Speed</Text>
+            <Text style={styles.statValue}>{item.maxSpeed.toFixed(1)} km/h</Text>
+          </View>
         </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Duration</Text>
-          <Text style={styles.statValue}>{formatDuration(item.duration)}</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Avg Speed</Text>
-          <Text style={styles.statValue}>{item.avgSpeed.toFixed(1)} km/h</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Max Speed</Text>
-          <Text style={styles.statValue}>{item.maxSpeed.toFixed(1)} km/h</Text>
-        </View>
-      </View>
-    </Card>
+      </Card>
+    </AnimatedListItem>
   ), [getRouteColor, getRouteIcon, formatDate, formatDuration]);
 
   const listHeader = (
@@ -424,14 +430,15 @@ export function HistoryScreen() {
               <Text style={styles.emptySubtext}>
                 {isGuest ? 'Record a guest ride from Track, or sign in from More to sync history.' : 'Record your first ride to see it here'}
               </Text>
-              <Pressable
-                style={({ pressed }) => [styles.emptyCtaButton, pressed && { opacity: 0.9 }]}
+              <PressableScale
+                style={styles.emptyCtaButton}
+                scaleTo={0.96}
                 onPress={() => navigation.navigate('Track')}
                 accessibilityLabel="Record a ride"
                 accessibilityRole="button"
               >
                 <Text style={styles.emptyCtaText}>Record a ride</Text>
-              </Pressable>
+              </PressableScale>
             </View>
           )
         }

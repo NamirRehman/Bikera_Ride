@@ -2,6 +2,7 @@ import React, { memo } from 'react';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radii } from '../theme/tokens';
+import { XpTokenIcon } from './XpTokenIcon';
 
 const imeraLogo = require('../../assets/imera-token.png');
 
@@ -31,9 +32,7 @@ export const StatsHero = memo(function StatsHero({
         <View style={styles.divider} />
 
         <View style={styles.cell}>
-          <View style={styles.iconWrap}>
-            <Ionicons name="flash" size={16} color={colors.brandPurple} />
-          </View>
+          <XpTokenIcon size={36} style={styles.xpIcon} />
           <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
             {xp}
           </Text>
@@ -94,6 +93,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(66,192,251,0.14)',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 8,
+  },
+  xpIcon: {
     marginBottom: 8,
   },
   imeraIcon: {

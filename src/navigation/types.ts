@@ -9,13 +9,13 @@ export type AppTabsParamList = {
   Dashboard: undefined;
   Track: undefined;
   Friends: undefined;
-  History: undefined;
+  Leaderboard: undefined;
   More: undefined;
 };
 
 export type MoreStackParamList = {
   MoreHome: undefined;
-  Leaderboard: undefined;
+  History: undefined;
   Wallet: undefined;
   Profile: undefined;
 };

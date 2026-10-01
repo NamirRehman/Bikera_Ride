@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Text, View, StyleSheet, TouchableOpacity, Dimensions, Alert, Platform, Modal, Pressable, Animated } from 'react-native';
+import { Text, View, StyleSheet, TouchableOpacity, Dimensions, Alert, Platform, Modal, Pressable, Animated, Switch, AppState, type AppStateStatus } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { Principal } from '@dfinity/principal';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { Screen } from '../components/Screen';
 import { colors, radii, shadows } from '../theme/tokens';
@@ -14,10 +15,11 @@ import {
   getBikeraConsensusActor,
   getBikeraXpActor,
 } from '../utils/actors';
-import { invalidateDashboardCache, invalidateUserCaches } from '../utils/cacheHelpers';
+import { invalidateAfterRide } from '../utils/cacheHelpers';
 import { ShadowWorkerService } from '../services/ShadowWorkerService';
 import { getGPSPointBatcher } from '../services/gpsPointBatcher';
 import { useToastHelpers } from '../contexts/ToastContext';
+import { rideAutoStart } from '../services/rideAutoStart';
 
 const { width } = Dimensions.get('window');
 
@@ -55,8 +57,9 @@ function MapPlaceholder() {
 }
 
 export function TrackScreen() {
-  const { principal, getIdentity } = useAuth();
+  const { principal, isGuest, getIdentity } = useAuth();
   const { success, error, info, warning } = useToastHelpers();
+  const canTrack = !!principal && !isGuest;
   const [isTracking, setIsTracking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -66,6 +69,8 @@ export function TrackScreen() {
   const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [currentPos, setCurrentPos] = useState<Location.LocationObject | null>(null);
+  const [autoStartOnLaunch, setAutoStartOnLaunch] = useState(false);
+  const [autoStartHydrated, setAutoStartHydrated] = useState(false);
   const [session, setSession] = useState<SessionData>({
     distance: 0,
     duration: 0,
@@ -84,6 +89,10 @@ export function TrackScreen() {
   // Use refs for tracking state so callbacks can access current values immediately
   const isTrackingRef = useRef<boolean>(false);
   const isPausedRef = useRef<boolean>(false);
+  const isStoppingRef = useRef<boolean>(false);
+  const handleStartRef = useRef<() => Promise<void>>(async () => {});
+  const flushRideDataRef = useRef<(isEndFlush?: boolean) => Promise<void>>(async () => {});
+  const endSessionRef = useRef<() => Promise<void>>(async () => {});
 
   // Caching mechanism (matching web app pattern)
   const cachedRideDataRef = useRef<{
@@ -351,7 +360,7 @@ export function TrackScreen() {
         heading: [],
       }));
 
-      // Try batch update first, fallback to single point updates (matches web)
+      // Try batch update first; fallback sends ALL points (matches BikApp Track.tsx)
       try {
         if ((actor as any).updateActivitySessionWithPoints) {
           await (actor as any).updateActivitySessionWithPoints(
@@ -364,22 +373,37 @@ export function TrackScreen() {
           );
           addLog('info', `✅ Session updated with ${routePoints.length} route points`);
         } else {
-          // Fallback: update with single point
-          if (backendRoutePoints.length > 0) {
+          addLog('warn', 'updateActivitySessionWithPoints unavailable — fallback per-point');
+          for (const point of backendRoutePoints) {
             await (actor as any).updateActivitySession(
               sessionId,
               Math.round(totalDistanceMeters),
               Math.round(maxSpeedKmh),
               Math.round(avgSpeedKmh),
-              [backendRoutePoints[backendRoutePoints.length - 1]], // Send last point
+              [point],
               p
             );
-            addLog('debug', `Session updated (fallback method)`);
           }
+          addLog('info', `Session updated with ${routePoints.length} points (fallback)`);
         }
-      } catch (error) {
-        addLog('warn', 'Session update failed', error);
-        return false;
+      } catch (batchErr) {
+        addLog('warn', 'Batch update failed, trying per-point fallback', batchErr);
+        try {
+          for (const point of backendRoutePoints) {
+            await (actor as any).updateActivitySession(
+              sessionId,
+              Math.round(totalDistanceMeters),
+              Math.round(maxSpeedKmh),
+              Math.round(avgSpeedKmh),
+              [point],
+              p
+            );
+          }
+          addLog('info', `Session updated with ${routePoints.length} points (fallback after error)`);
+        } catch (fallbackErr) {
+          addLog('warn', 'Session update failed', fallbackErr);
+          return false;
+        }
       }
 
       return true;
@@ -392,9 +416,21 @@ export function TrackScreen() {
   // Flush cached ride data to backend (first flush after 2.5 min, or end flush on stop)
   // Defined here so it can be used in handleLocationUpdate
   const flushRideDataToBackend = useCallback(async (isEndFlush: boolean = false) => {
+    // End flush must wait for an in-flight first flush; soft flushes can skip
     if (sendInFlightRef.current) {
-      addLog('debug', 'Flush already in flight, skipping');
-      return;
+      if (!isEndFlush) {
+        addLog('debug', 'Flush already in flight, skipping');
+        return;
+      }
+      addLog('info', 'Waiting for in-flight flush before END flush…');
+      const waitStart = Date.now();
+      while (sendInFlightRef.current && Date.now() - waitStart < 15000) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (sendInFlightRef.current) {
+        addLog('warn', 'In-flight flush still busy — forcing END flush anyway');
+        sendInFlightRef.current = false;
+      }
     }
 
     const cached = cachedRideDataRef.current;
@@ -488,6 +524,8 @@ export function TrackScreen() {
     }
   }, [updateSessionOnCanister, principal, getIdentity]);
 
+  flushRideDataRef.current = flushRideDataToBackend;
+
   // End activity session on canister
   const endSessionOnCanister = useCallback(async (): Promise<void> => {
     try {
@@ -544,6 +582,28 @@ export function TrackScreen() {
     }
   }, [principal, getIdentity]);
 
+  endSessionRef.current = endSessionOnCanister;
+
+  // Mirror BikApp visibility flush: soft-flush ride cache when app backgrounds
+  useEffect(() => {
+    const onChange = (next: AppStateStatus) => {
+      if (next !== 'background' && next !== 'inactive') return;
+      if (!isTrackingRef.current || isPausedRef.current) return;
+      if (!principal) return;
+      void flushRideDataRef.current(false);
+      try {
+        const batcher = getGPSPointBatcher();
+        if (batcher.getQueueSize() > 0) {
+          void batcher.forceFlush();
+        }
+      } catch {
+        // non-blocking
+      }
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => sub.remove();
+  }, [principal]);
+
   // Handle GPS position updates
   const handleLocationUpdate = useCallback((location: Location.LocationObject) => {
     setCurrentPos(location);
@@ -588,13 +648,28 @@ export function TrackScreen() {
       deltaMeters = haversine(last.lat, last.lon, latitude, longitude);
       deltaSeconds = Math.max(0, (ts - last.ts) / 1000);
 
-      // Match web app: enforce ~1s update rate for processing (less strict than 0.3s)
-      // This allows more updates to be processed, especially for slow movement
+      // Match web app: enforce ~1s update rate for processing
       if (deltaSeconds < 1) {
-        addLog('debug', 'Skipping update (less than 1s since last)', {
-          deltaSeconds: deltaSeconds.toFixed(2),
-          deltaMeters: deltaMeters.toFixed(2)
-        });
+        // Still seed first route point so short/stationary stops aren't empty flushes
+        if (cachedRideDataRef.current.routePoints.length === 0) {
+          const seedPoint = {
+            latitude,
+            longitude,
+            timestamp: ts,
+            accuracy: accuracy ?? undefined,
+          };
+          cachedRideDataRef.current.routePoints.push(seedPoint);
+          cachedRideDataRef.current.totalDataPoints = 1;
+          cachedRideDataRef.current.firstCacheTime = ts;
+          cachedRideDataRef.current.lastUpdateTime = ts;
+          routePointsRef.current.push(seedPoint);
+          addLog('debug', 'Seeded first route point despite <1s gate');
+        } else {
+          addLog('debug', 'Skipping update (less than 1s since last)', {
+            deltaSeconds: deltaSeconds.toFixed(2),
+            deltaMeters: deltaMeters.toFixed(2)
+          });
+        }
         return;
       }
     } else {
@@ -789,8 +864,21 @@ export function TrackScreen() {
     }
   }, [isTracking, isPaused, principal, getIdentity]);
 
-  // Start tracking
-  const handleStart = async () => {
+  // Start tracking (manual or one-shot auto-start). Hard mutex against double-start.
+  const handleStart = useCallback(async () => {
+    if (!canTrack) {
+      warning('Sign in required', 'Sign in to start tracking rides.');
+      return;
+    }
+    if (isTrackingRef.current || isStoppingRef.current) {
+      addLog('warn', 'Start ignored — already tracking or stopping');
+      return;
+    }
+    if (!rideAutoStart.tryBeginStart()) {
+      addLog('warn', 'Start ignored — start already in flight');
+      return;
+    }
+
     setGpsError(null);
     setIsStarting(true);
 
@@ -802,23 +890,43 @@ export function TrackScreen() {
         status = newStatus;
       }
 
+      // Re-check after async permission UI (user may have navigated away / pressed stop)
+      if (isTrackingRef.current || isStoppingRef.current) {
+        return;
+      }
+
       if (status !== 'granted') {
         setGpsError('Location permission denied');
         error('Permission Required', 'Location permission is required to track your ride.');
-        setIsStarting(false);
         return;
       }
 
       setPermissionStatus(status);
 
+      // Best-effort background permission for pocket rides (matches app.json capabilities)
+      try {
+        const bg = await Location.getBackgroundPermissionsAsync();
+        if (bg.status !== 'granted') {
+          await Location.requestBackgroundPermissionsAsync();
+        }
+      } catch (bgErr) {
+        addLog('warn', 'Background location permission not granted (foreground tracking continues)', bgErr);
+      }
+
+      let sessionStarted = false;
       if (principal) {
         try {
           await startSessionOnCanister();
+          sessionStarted = !!sessionIdRef.current;
         } catch (e) {
           addLog('warn', 'Session start failed, continuing anyway', e);
         }
       } else {
         addLog('info', 'Guest mode: tracking locally without saving to an account');
+      }
+
+      if (isStoppingRef.current) {
+        return;
       }
 
       // Reset state
@@ -863,7 +971,6 @@ export function TrackScreen() {
           accuracy: Platform.OS === 'ios' ? Location.Accuracy.BestForNavigation : Location.Accuracy.High,
         });
         addLog('info', 'Got initial position', initialLocation.coords);
-        // Set the initial reference point directly (don't call handleLocationUpdate yet)
         const ts = initialLocation.timestamp || Date.now();
         lastPointRef.current = {
           lat: initialLocation.coords.latitude,
@@ -873,19 +980,29 @@ export function TrackScreen() {
         addLog('info', 'Initial reference point set', lastPointRef.current);
       } catch (initialError) {
         addLog('warn', 'Could not get initial position, will use first watch update', initialError);
-        // Continue anyway - first watch update will establish the point
       }
 
-      // Start location tracking
-      // Use High accuracy for better GPS updates on mobile
-      // Note: timeInterval and distanceInterval are hints, actual updates may vary
+      if (isStoppingRef.current) {
+        return;
+      }
+
+      // Tear down any stale watch before creating a new one
+      if (watchSubscriptionRef.current) {
+        try {
+          watchSubscriptionRef.current.remove?.();
+        } catch {
+          // ignore
+        }
+        watchSubscriptionRef.current = null;
+      }
+
       try {
         const watchOptions: Location.LocationOptions = {
           accuracy: Platform.OS === 'ios' ? Location.Accuracy.BestForNavigation : Location.Accuracy.High,
-          timeInterval: 500, // Android only (iOS ignores). Still safe to include.
+          // Match BikApp sampling: ~1Hz, accept small moves (was distanceInterval:5 which under-sampled)
+          timeInterval: 1000,
           distanceInterval: 1,
         };
-        // Android-only: can pop a system dialog directing user to enable location
         if (Platform.OS === 'android') {
           (watchOptions as any).mayShowUserSettingsDialog = true;
         }
@@ -893,11 +1010,10 @@ export function TrackScreen() {
         watchSubscriptionRef.current = await Location.watchPositionAsync(
           watchOptions,
           (location) => {
-            // Wrap in try-catch to prevent crashes from breaking the watch
             try {
               handleLocationUpdate(location);
-            } catch (error) {
-              addLog('error', 'Error in location update handler', error);
+            } catch (err) {
+              addLog('error', 'Error in location update handler', err);
             }
           }
         );
@@ -906,23 +1022,80 @@ export function TrackScreen() {
       } catch (watchError: any) {
         addLog('error', 'Failed to start location watch', watchError);
         setGpsError(watchError?.message || 'Failed to start GPS tracking');
+        // Don't leave an orphan canister session if GPS watch never started
+        if (sessionStarted && sessionIdRef.current) {
+          try {
+            await endSessionRef.current();
+          } catch {
+            // ignore
+          }
+        }
         throw watchError;
       }
 
-      // Set tracking state using both state and refs
-      // Refs ensure callbacks see the value immediately (state updates are async)
       isTrackingRef.current = true;
       isPausedRef.current = false;
       setIsTracking(true);
       setIsPaused(false);
-    } catch (error: any) {
-      addLog('error', 'Start error', error);
-      setGpsError(error.message || 'Failed to start tracking');
-      Alert.alert('Error', error.message || 'Failed to start tracking');
+    } catch (err: any) {
+      addLog('error', 'Start error', err);
+      setGpsError(err.message || 'Failed to start tracking');
+      Alert.alert('Error', err.message || 'Failed to start tracking');
+      isTrackingRef.current = false;
+      setIsTracking(false);
     } finally {
       setIsStarting(false);
+      rideAutoStart.endStart();
     }
-  };
+  }, [addLog, canTrack, error, warning, principal, startSessionOnCanister, handleLocationUpdate]);
+
+  handleStartRef.current = handleStart;
+
+  // Load auto-start preference for Track-screen toggle
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const enabled = await rideAutoStart.hydrate();
+      if (!cancelled) {
+        setAutoStartOnLaunch(enabled);
+        setAutoStartHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // One-shot auto-start when this screen is focused after an armed app launch
+  useFocusEffect(
+    useCallback(() => {
+      if (!canTrack) {
+        return undefined;
+      }
+      if (!rideAutoStart.claimPendingStart()) {
+        return undefined;
+      }
+      let started = false;
+      const t = setTimeout(() => {
+        started = true;
+        void handleStartRef.current();
+      }, 150);
+      return () => {
+        clearTimeout(t);
+        if (!started) {
+          rideAutoStart.releaseUnstartedClaim();
+        }
+      };
+    }, [canTrack])
+  );
+
+  const onToggleAutoStart = useCallback(async (value: boolean) => {
+    setAutoStartOnLaunch(value);
+    await rideAutoStart.setEnabled(value);
+    if (value) {
+      info('Auto-start on', 'Tracking starts the next time you open the app.');
+    }
+  }, [info]);
 
   // Pause/resume tracking
   const handlePause = () => {
@@ -956,7 +1129,7 @@ export function TrackScreen() {
       'Stop Tracking?',
       principal
         ? `Stop this ride and save:\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\n• ${session.maxSpeed.toFixed(1)} km/h max speed`
-        : `Stop this guest ride?\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\nIt stays on this device until you sign in.`,
+        : `Stop this guest ride?\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\nGuest rides are not saved to your account.`,
       [
         {
           text: 'Cancel',
@@ -976,11 +1149,12 @@ export function TrackScreen() {
 
   // Perform the actual stop operation
   const performStop = async () => {
+    isStoppingRef.current = true;
     setIsStopping(true);
     if (principal) {
       info('Saving your ride...', 'Please wait while we save your ride data.');
     } else {
-      info('Ride finished', 'This guest ride stays on this device.');
+      info('Ride finished', 'Guest rides are local for this session only — sign in to save rides.');
     }
     
     // Store session data for success modal
@@ -993,7 +1167,7 @@ export function TrackScreen() {
     setIsTracking(false);
     setIsPaused(false);
 
-    // Flush GPS point batcher before stopping
+    // Flush GPS point batcher + shadow worker final batch (matches BikApp Track.tsx)
     try {
       const batcher = getGPSPointBatcher();
       if (batcher.getQueueSize() > 0) {
@@ -1003,7 +1177,19 @@ export function TrackScreen() {
       }
     } catch (error) {
       addLog('warn', 'Error flushing GPS points', error);
-      // Continue even if flush fails
+    }
+
+    if (principal) {
+      try {
+        const flushResult = await ShadowWorkerService.flushBatch(principal);
+        if (flushResult.success && flushResult.submitted) {
+          addLog('info', '[SHADOW WORKER] Final batch flushed successfully');
+        } else {
+          addLog('debug', '[SHADOW WORKER] No batch to flush or flush skipped', flushResult.reason);
+        }
+      } catch (flushError) {
+        addLog('warn', '[SHADOW WORKER] Final flush failed (non-blocking)', flushError);
+      }
     }
 
     // Stop location tracking
@@ -1051,15 +1237,14 @@ export function TrackScreen() {
       endFlushSent: false,
     };
 
-    // Invalidate caches after completing a ride
-    // This ensures dashboard, profile, history, etc. show updated data
+    // Narrow invalidation after ride — Home + history, not every screen
     if (principal) {
-      await invalidateDashboardCache(principal);
-      await invalidateUserCaches(principal);
+      await invalidateAfterRide(principal);
       addLog('info', 'Invalidated caches after ride completion');
     }
 
     setIsStopping(false);
+    isStoppingRef.current = false;
     
     // Show success modal with ride summary
     setShowSuccessModal(true);
@@ -1108,20 +1293,36 @@ export function TrackScreen() {
   };
 
   return (
-    <Screen scroll={false} contentStyle={{ paddingHorizontal: 0, paddingTop: 0, flex: 1 }}>
+    <Screen scroll={false} animate={false} contentStyle={{ paddingHorizontal: 0, paddingTop: 0, flex: 1 }}>
       <View style={styles.container}>
         {/* Header Overlay */}
         <View style={styles.headerOverlay}>
-          <View>
-            <Text style={styles.headerTitle}>Track Ride</Text>
-            {!principal ? (
-              <Text style={styles.guestHint}>Guest — ride stays on this device</Text>
-            ) : null}
+          <View style={styles.headerTopRow}>
+            <View style={styles.headerTitleBlock}>
+              <Text style={styles.headerTitle}>Track Ride</Text>
+              {!principal || isGuest ? (
+                <Text style={styles.guestHint}>Guest — sign in to track rides</Text>
+              ) : null}
+            </View>
+            <View style={styles.gpsIndicator}>
+              <Ionicons name="cellular" size={14} color={getGpsStatusColor()} />
+              <Text style={[styles.gpsText, { color: getGpsStatusColor() }]}>{getGpsStatus()}</Text>
+            </View>
           </View>
-          <View style={styles.gpsIndicator}>
-            <Ionicons name="cellular" size={14} color={getGpsStatusColor()} />
-            <Text style={[styles.gpsText, { color: getGpsStatusColor() }]}>{getGpsStatus()}</Text>
-          </View>
+
+          {!isTracking && autoStartHydrated && canTrack ? (
+            <View style={styles.autoStartRow}>
+              <Text style={styles.autoStartTitle}>Auto start on app open</Text>
+              <Switch
+                value={autoStartOnLaunch}
+                onValueChange={onToggleAutoStart}
+                disabled={isStarting || isStopping}
+                trackColor={{ false: 'rgba(255,255,255,0.15)', true: colors.brandBlue100 }}
+                thumbColor="#fff"
+                accessibilityLabel="Auto start on app open"
+              />
+            </View>
+          ) : null}
         </View>
 
         {/* Map Layer */}
@@ -1130,7 +1331,10 @@ export function TrackScreen() {
         {/* Live Stats Overlay */}
         <LinearGradient
           colors={['rgba(6, 7, 23, 0.9)', 'rgba(6, 7, 23, 0.98)']}
-          style={styles.statsOverlay}
+          style={[
+            styles.statsOverlay,
+            !isTracking && autoStartHydrated && canTrack ? styles.statsOverlayWithAutoStart : null,
+          ]}
         >
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
@@ -1174,16 +1378,26 @@ export function TrackScreen() {
         <View style={styles.controlsContainer}>
           {!isTracking ? (
             <TouchableOpacity
-              style={[styles.mainButton, { backgroundColor: colors.brandBlue100 }]}
+              style={[
+                styles.mainButton,
+                { backgroundColor: canTrack ? colors.brandBlue100 : 'rgba(255,255,255,0.18)' },
+                !canTrack && styles.mainButtonDisabled,
+              ]}
               onPress={handleStart}
-              disabled={isStarting}
-              accessibilityLabel="Start ride"
+              disabled={!canTrack || isStarting}
+              accessibilityLabel={canTrack ? 'Start ride' : 'Sign in to start tracking'}
               accessibilityRole="button"
+              accessibilityState={{ disabled: !canTrack }}
             >
               {isStarting ? (
                 <ThreeDotLoader color="#fff" size="small" />
               ) : (
-                <Ionicons name="play" size={32} color="#fff" style={{ marginLeft: 4 }} />
+                <Ionicons
+                  name="play"
+                  size={32}
+                  color={canTrack ? '#fff' : 'rgba(255,255,255,0.35)'}
+                  style={{ marginLeft: 4 }}
+                />
               )}
             </TouchableOpacity>
           ) : (
@@ -1220,7 +1434,13 @@ export function TrackScreen() {
         {!isTracking && (
           <View style={styles.tipsContainer}>
             <Text style={styles.tipsText}>
-              {gpsError ? `Error: ${gpsError}` : 'Ready to ride? Tap play to start tracking.'}
+              {gpsError
+                ? `Error: ${gpsError}`
+                : !canTrack
+                  ? 'Sign in to start tracking rides.'
+                  : isStarting
+                    ? 'Starting tracking…'
+                    : 'Ready to ride? Tap play to start tracking.'}
             </Text>
           </View>
         )}
@@ -1410,12 +1630,19 @@ const styles = StyleSheet.create({
   headerOverlay: {
     position: 'absolute',
     top: 20,
-    left: 20,
-    right: 20,
+    left: 16,
+    right: 16,
+    zIndex: 10,
+    gap: 10,
+  },
+  headerTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    zIndex: 10,
+  },
+  headerTitleBlock: {
+    flexShrink: 1,
+    paddingRight: 12,
   },
   headerTitle: {
     color: '#fff',
@@ -1453,6 +1680,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
     gap: 16,
+  },
+  statsOverlayWithAutoStart: {
+    top: 128,
   },
   statsRow: {
     flexDirection: 'row',
@@ -1515,6 +1745,11 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: 'rgba(255,255,255,0.2)',
   },
+  mainButtonDisabled: {
+    shadowOpacity: 0,
+    elevation: 0,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
   secondaryButton: {
     width: 56,
     height: 56,
@@ -1529,6 +1764,25 @@ const styles = StyleSheet.create({
     bottom: 140,
     width: '100%',
     alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  autoStartRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(6, 7, 23, 0.82)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+  autoStartTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
   },
   tipsText: {
     color: colors.textSecondary,

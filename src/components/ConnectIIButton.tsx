@@ -1,9 +1,10 @@
 import React from 'react';
-import { Pressable, Text, View, StyleSheet, Image, type ColorValue } from 'react-native';
+import { Text, View, StyleSheet, Image, type ColorValue } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, radii, shadows, gradients } from '../theme/tokens';
 import { ThreeDotLoader } from './ThreeDotLoader';
+import { PressableScale } from './motion';
 
 let icpLogo: number | null = null;
 try {
@@ -42,10 +43,11 @@ export function ConnectIIButton({ variant = 'menu' }: { variant?: 'menu' | 'hero
 
   if (variant === 'hero') {
     return (
-      <Pressable
+      <PressableScale
         onPress={handleLogin}
         disabled={isLoading}
-        style={({ pressed }) => [styles.heroWrap, isLoading && styles.disabled, pressed && !isLoading && styles.pressed]}
+        style={[styles.heroWrap, isLoading && styles.disabled]}
+        scaleTo={0.96}
         accessibilityRole="button"
         accessibilityLabel="Sign in with Internet Identity"
         accessibilityHint="Opens Internet Identity. Use your passkey or security device, then return to Bikera."
@@ -63,15 +65,16 @@ export function ConnectIIButton({ variant = 'menu' }: { variant?: 'menu' | 'hero
           )}
           <Text style={styles.heroText}>{label}</Text>
         </LinearGradient>
-      </Pressable>
+      </PressableScale>
     );
   }
 
   return (
-    <Pressable
+    <PressableScale
       onPress={handleLogin}
       disabled={isLoading}
       style={[styles.menuWrap, isLoading && styles.disabled]}
+      scaleTo={0.96}
       accessibilityRole="button"
       accessibilityLabel="Sign in with Internet Identity"
     >
@@ -93,7 +96,7 @@ export function ConnectIIButton({ variant = 'menu' }: { variant?: 'menu' | 'hero
           </View>
         )}
       </LinearGradient>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -168,8 +171,5 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.7,
-  },
-  pressed: {
-    opacity: 0.88,
   },
 });

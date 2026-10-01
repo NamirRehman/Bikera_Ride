@@ -18,6 +18,7 @@ import { useToastHelpers } from '../contexts/ToastContext';
 import { WalletScreen } from './WalletScreen';
 import { WEB_APP_URL } from '../config';
 import { GuestBanner } from '../components/GuestBanner';
+import { applyCountryTag, parseCountryFromBio, stripCountryTag, getStoredCountry, saveUserCountry, clearUserCountry, COUNTRY_OPTIONS, countryName, countryFlag } from '../services/userCountry';
 
 function SettingRow({ icon, label, value, onPress, isDestructive = false, rightComponent }: any) {
   return (
@@ -46,6 +47,8 @@ export function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [showUpdateForm, setShowUpdateForm] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [profileCountry, setProfileCountry] = useState<string | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
 
   // Profile Data
@@ -128,7 +131,7 @@ export function ProfileScreen() {
 
     const [profileOpt, stats, xpSnapshot, imeraBalance] = await Promise.all([
       userActor.getCurrentUserProfile(userId).catch(() => []),
-      shadow.getUserDashboardSnapshot(userId, true).then(snapshot => snapshot?.stats || null).catch(() => null),
+      shadow.getUserDashboardSnapshot(userId, true).then((snapshot: any) => snapshot?.stats || null).catch(() => null),
       shadow.getXPSnapshot(userId, true).catch(() => null),
       imeraActor.icrc1_balance_of({ owner: userId, subaccount: [] }).catch(() => 0n),
     ]);
@@ -146,6 +149,9 @@ export function ProfileScreen() {
     identifier: principal || undefined,
     fetcher: fetchProfileData,
     enabled: !!principal,
+    tier: 'normal',
+    refetchOnForeground: false,
+    minRefetchIntervalMs: 90_000,
   });
 
   // Update state when cached data is available
@@ -163,7 +169,11 @@ export function ProfileScreen() {
         setFormDisplayName(displayNameVal || '');
         const bioRaw = profile.bio;
         const bioVal = Array.isArray(bioRaw) && bioRaw.length > 0 ? bioRaw[0] : (typeof bioRaw === 'string' ? bioRaw : '');
-        setFormBio(bioVal || '');
+        setFormBio(stripCountryTag(bioVal || ''));
+        const fromBio = parseCountryFromBio(bioRaw ?? bioVal);
+        void getStoredCountry().then((stored) => {
+          setProfileCountry(fromBio || stored);
+        });
         const avatarRaw = profile.avatar;
         const avatarVal = Array.isArray(avatarRaw) && avatarRaw.length > 0 ? avatarRaw[0] : (typeof avatarRaw === 'string' ? avatarRaw : '');
         setFormAvatar(avatarVal || '');
@@ -249,11 +259,21 @@ export function ProfileScreen() {
       }
 
       const userActor = getBikeraUserActor({}, identity);
+      const existingCountry =
+        profileCountry ||
+        parseCountryFromBio(
+          Array.isArray(profileData?.profile?.bio)
+            ? profileData.profile.bio[0]
+            : profileData?.profile?.bio
+        );
+      const bioToSave = formBio
+        ? (existingCountry ? applyCountryTag(formBio, existingCountry) : formBio)
+        : (existingCountry ? applyCountryTag('', existingCountry) : '');
       const res: any = await userActor.updateProfile(
         formUsername ? [formUsername] : [],
         formEmail ? [formEmail] : [],
         formDisplayName ? [formDisplayName] : [],
-        formBio ? [formBio] : [],
+        bioToSave ? [bioToSave] : [],
         formAvatar ? [formAvatar] : [],
         [
           {
@@ -664,6 +684,19 @@ export function ProfileScreen() {
               />
               <View style={styles.separator} />
               <SettingRow
+                icon="flag-outline"
+                label="Country"
+                value={profileCountry ? `${countryFlag(profileCountry)}  ${countryName(profileCountry)}` : 'Optional'}
+                onPress={() => {
+                  if (isGuest || !principal) {
+                    info('Sign in', 'Sign in to set your country.');
+                    return;
+                  }
+                  setShowCountryPicker(true);
+                }}
+              />
+              <View style={styles.separator} />
+              <SettingRow
                 icon="create-outline"
                 label="Edit Profile"
                 onPress={() => setShowUpdateForm(true)}
@@ -822,6 +855,65 @@ export function ProfileScreen() {
           <Text style={styles.versionText}>Bikera v1.0.4 (Beta)</Text>
         </>
       )}
+
+      {/* Country picker (optional) */}
+      <Modal visible={showCountryPicker} animationType="fade" transparent onRequestClose={() => setShowCountryPicker(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setShowCountryPicker(false)}>
+          <Pressable style={[styles.modalContent, { maxHeight: '70%' }]} onPress={() => {}}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Country</Text>
+              <Pressable onPress={() => setShowCountryPicker(false)}>
+                <Ionicons name="close" size={24} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+            <Text style={styles.countryHint}>Optional. Needed to use the Country filter on the leaderboard.</Text>
+            <ScrollView style={styles.modalBody}>
+              <Pressable
+                onPress={async () => {
+                  try {
+                    await clearUserCountry({ identity: getIdentity(), principalText: principal || undefined });
+                    setProfileCountry(null);
+                    setShowCountryPicker(false);
+                    success('Country cleared', 'Leaderboard Country filter stays off (world).');
+                  } catch (e: any) {
+                    error('Country', e?.message || 'Could not clear country');
+                  }
+                }}
+                style={[styles.countryOptionRow, !profileCountry && styles.countryOptionActive]}
+              >
+                <Text style={styles.countryOptionFlag}>🌍</Text>
+                <Text style={styles.countryOptionName}>Not set (world)</Text>
+              </Pressable>
+              {COUNTRY_OPTIONS.map((opt) => (
+                <Pressable
+                  key={opt.code}
+                  onPress={async () => {
+                    try {
+                      await saveUserCountry(opt.code, {
+                        identity: getIdentity(),
+                        principalText: principal || undefined,
+                        currentBio: formBio,
+                      });
+                      setProfileCountry(opt.code);
+                      setShowCountryPicker(false);
+                      success('Country saved', `${countryFlag(opt.code)} ${countryName(opt.code)}`);
+                    } catch (e: any) {
+                      error('Country', e?.message || 'Could not save country');
+                    }
+                  }}
+                  style={[styles.countryOptionRow, profileCountry === opt.code && styles.countryOptionActive]}
+                >
+                  <Text style={styles.countryOptionFlag}>{countryFlag(opt.code)}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.countryOptionName}>{opt.name}</Text>
+                    <Text style={styles.countryOptionCode}>{opt.code}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Update Profile Modal */}
       <Modal visible={showUpdateForm} animationType="slide" transparent>
@@ -1566,5 +1658,39 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 16,
+  },
+  countryHint: {
+    color: colors.textTertiary,
+    fontSize: 13,
+    paddingHorizontal: 20,
+    marginBottom: 8,
+  },
+  countryOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border2,
+  },
+  countryOptionActive: {
+    backgroundColor: 'rgba(66, 192, 251, 0.1)',
+  },
+  countryOptionCode: {
+    color: colors.textTertiary,
+    fontWeight: '600',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  countryOptionFlag: {
+    fontSize: 28,
+    width: 40,
+    textAlign: 'center',
+  },
+  countryOptionName: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

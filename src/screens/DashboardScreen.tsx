@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState, useCallback } from 'react';
-import { Text, View, StyleSheet, RefreshControl, Pressable } from 'react-native';
+import { Text, View, StyleSheet, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
@@ -11,6 +11,7 @@ import StatsHero from '../components/StatsHero';
 import QuickActions from '../components/QuickActions';
 import { useAuth } from '../contexts/AuthContext';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { PressableScale, FadeInView } from '../components/motion';
 import { colors } from '../theme/tokens';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { GuestBanner } from '../components/GuestBanner';
@@ -23,6 +24,7 @@ import {
 } from '../utils/actors';
 import { HttpAgent } from '@dfinity/agent';
 import { useCachedData } from '../hooks/useCachedData';
+import { startupGate } from '../services/startupGate';
 
 interface DashboardStats {
   xp: number | null;
@@ -59,7 +61,7 @@ export function DashboardScreen() {
   const quickActions = useMemo(() => [
     { label: 'Track ride', icon: 'navigate-outline', onPress: () => navigation.navigate('Track') },
     { label: 'Friends', icon: 'people-outline', onPress: () => navigation.navigate('Friends') },
-    { label: 'Leaderboard', icon: 'trophy-outline', onPress: () => navigation.navigate('More', { screen: 'Leaderboard' }) },
+    { label: 'Leaderboard', icon: 'trophy-outline', onPress: () => navigation.navigate('Leaderboard') },
     { label: 'Wallet', icon: 'wallet-outline', onPress: () => navigation.navigate('More', { screen: 'Wallet' }) },
   ], [navigation]);
 
@@ -138,11 +140,11 @@ export function DashboardScreen() {
 
     // Load all snapshots in parallel (optimized - reduced timeout for faster failure)
     const [xpSnapshot, dashboardSnapshot, imeraBalance, activitySessions, userProfile] = await Promise.all([
-      withTimeout(shadow.getXPSnapshot(p, true).catch(() => null), 8000, null),
-      withTimeout(shadow.getUserDashboardSnapshot(p, true).catch(() => null), 8000, null),
+      withTimeout(shadow.getXPSnapshot(p, true).catch(() => null as any), 8000, null as any),
+      withTimeout(shadow.getUserDashboardSnapshot(p, true).catch(() => null as any), 8000, null as any),
       withTimeout(imeraActor.icrc1_balance_of({ owner: p, subaccount: [] }).catch(() => 0n), 8000, 0n),
-      withTimeout(shadow.getActivitySessions(p, BigInt(20), BigInt(0)).catch(() => []), 8000, []),
-      withTimeout(userActor.getCurrentUserProfile(p).catch(() => null), 8000, null),
+      withTimeout(shadow.getActivitySessions(p, BigInt(20), BigInt(0)).catch(() => [] as any[]), 8000, [] as any[]),
+      withTimeout(userActor.getCurrentUserProfile(p).catch(() => null as any), 8000, null as any),
     ]);
 
     // Extract XP data
@@ -226,15 +228,26 @@ export function DashboardScreen() {
     identifier: principal || undefined,
     fetcher: fetchDashboardData,
     enabled: !!principal,
+    tier: 'bootstrap',
+    refetchOnFocus: false,
+    refetchOnForeground: false,
+    minRefetchIntervalMs: 90_000,
   });
 
-  // Update state when cached data is available
+  // Update state when cached data is available; unlock cold-start gate for other screens
   useEffect(() => {
+    if (!principal) {
+      startupGate.unlock('guest-home');
+      return;
+    }
     if (dashboardData) {
       setStats(dashboardData.stats);
       setDisplayName(dashboardData.displayName);
+      startupGate.unlock('dashboard');
+    } else if (!dashboardLoading) {
+      startupGate.unlock('dashboard-empty');
     }
-  }, [dashboardData]);
+  }, [principal, dashboardData, dashboardLoading]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -253,61 +266,66 @@ export function DashboardScreen() {
         subtitle={principal ? `ID: ${principal.slice(0, 10)}…` : isGuest ? 'Exploring without signing in' : undefined}
       />
 
-      <GuestBanner message="Home, Track, Friends, History, and More all work. Sign in is at the top of More if you want to save rides and rewards." />
+      <GuestBanner message="Home, Track, Friends, Ranks, and More all work. Sign in is at the top of More if you want to save rides and rewards." />
 
       <View style={styles.content}>
-        {dashboardLoading && principal ? (
-          <LoadingBlock message="Loading stats…" color={colors.brandBlue100} />
-        ) : principal && !dashboardData ? (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>Couldn't load stats</Text>
-            <Text style={styles.errorSubtext}>Check your connection and try again.</Text>
-            <PrimaryButton label="Retry" onPress={() => refetch()} style={styles.retryButton} />
-          </View>
-        ) : (
-          <StatsHero
-            distance={formattedDistance}
-            xp={formattedXP}
-            imera={formattedImera}
-          />
-        )}
+        <FadeInView variant="up">
+          {dashboardLoading && principal ? (
+            <LoadingBlock message="Loading stats…" color={colors.brandBlue100} />
+          ) : principal && !dashboardData ? (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>Couldn't load stats</Text>
+              <Text style={styles.errorSubtext}>Check your connection and try again.</Text>
+              <PrimaryButton label="Retry" onPress={() => refetch()} style={styles.retryButton} />
+            </View>
+          ) : (
+            <StatsHero
+              distance={formattedDistance}
+              xp={formattedXP}
+              imera={formattedImera}
+            />
+          )}
+        </FadeInView>
 
-        <View style={styles.sectionContainer}>
+        <FadeInView delay={80} style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>Quick actions</Text>
           <QuickActions actions={quickActions} />
-        </View>
+        </FadeInView>
 
-        <Pressable
-          onPress={() => navigation.navigate('Track')}
-          style={({ pressed }) => [styles.rideCard, pressed && styles.rideCardPressed]}
-          accessibilityRole="button"
-          accessibilityLabel="Start tracking a ride"
-        >
-          <LinearGradient
-            colors={[colors.brandIndigo, colors.brandPurple, colors.brandBlue200]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.rideGradient}
+        <FadeInView delay={140}>
+          <PressableScale
+            onPress={() => navigation.navigate('Track')}
+            style={styles.rideCard}
+            scaleTo={0.97}
+            accessibilityRole="button"
+            accessibilityLabel="Start tracking a ride"
           >
-            <View style={styles.rideTop}>
-              <View style={styles.rideIcon}>
-                <Ionicons name="bicycle" size={24} color="#0B1220" />
+            <LinearGradient
+              colors={[colors.brandIndigo, colors.brandPurple, colors.brandBlue200]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.rideGradient}
+            >
+              <View style={styles.rideTop}>
+                <View style={styles.rideIcon}>
+                  <Ionicons name="bicycle" size={24} color="#0B1220" />
+                </View>
+                <View style={styles.rideCopy}>
+                  <Text style={styles.rideTitle}>Ready to ride</Text>
+                  <Text style={styles.rideSubtitle}>
+                    {isGuest
+                      ? 'Track locally as a guest. Sign in later to save rides to your account.'
+                      : 'Open GPS tracking and start earning as you move.'}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.rideCopy}>
-                <Text style={styles.rideTitle}>Ready to ride</Text>
-                <Text style={styles.rideSubtitle}>
-                  {isGuest
-                    ? 'Track locally as a guest. Sign in later to save rides to your account.'
-                    : 'Open GPS tracking and start earning as you move.'}
-                </Text>
+              <View style={styles.rideButton}>
+                <Text style={styles.rideButtonText}>Start tracking</Text>
+                <Ionicons name="arrow-forward" size={18} color="#0B1220" />
               </View>
-            </View>
-            <View style={styles.rideButton}>
-              <Text style={styles.rideButtonText}>Start tracking</Text>
-              <Ionicons name="arrow-forward" size={18} color="#0B1220" />
-            </View>
-          </LinearGradient>
-        </Pressable>
+            </LinearGradient>
+          </PressableScale>
+        </FadeInView>
       </View>
     </Screen>
   );
@@ -371,9 +389,6 @@ const styles = StyleSheet.create({
   rideCard: {
     marginTop: 24,
     borderRadius: 24,
-  },
-  rideCardPressed: {
-    opacity: 0.9,
   },
   rideGradient: {
     borderRadius: 24,

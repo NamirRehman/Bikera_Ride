@@ -1,12 +1,5 @@
-// Cache helper utilities for invalidating related caches
-// Call these after mutations so focused screens refetch immediately
+import { dataCache, type CacheKeyRef } from '../services/dataCache';
 
-import { dataCache } from '../services/dataCache';
-
-/**
- * Invalidate all caches related to user data
- * Call this after profile updates, ride completion, etc.
- */
 export async function invalidateUserCaches(principal?: string): Promise<void> {
   const cachesToInvalidate = [
     'dashboard',
@@ -15,64 +8,57 @@ export async function invalidateUserCaches(principal?: string): Promise<void> {
     'history',
     'wallet',
     'friends',
-    'staking',
   ];
 
-  await Promise.all([
+  const keys: CacheKeyRef[] = [
     ...cachesToInvalidate.map((type) =>
-      principal ? dataCache.invalidate(type, principal) : dataCache.invalidateType(type)
+      principal ? { type, identifier: principal } : { type }
     ),
-    dataCache.invalidateType('leaderboard'),
-    dataCache.invalidateType('userPublic'),
-    dataCache.invalidateType('publicProfile'),
-  ]);
+    { type: 'leaderboard' },
+    { type: 'userPublic' },
+    { type: 'publicProfile' },
+  ];
 
+  await dataCache.invalidateMany(keys);
   if (__DEV__) console.log('[CACHE] Invalidated user caches');
 }
 
-/**
- * Invalidate dashboard cache specifically
- * Call after completing a ride or earning rewards
- */
+/** After ride end: dashboard + history only (not full user purge). */
+export async function invalidateAfterRide(principal?: string): Promise<void> {
+  const keys: CacheKeyRef[] = principal
+    ? [
+        { type: 'dashboard', identifier: principal },
+        { type: 'history', identifier: principal },
+        { type: 'stats', identifier: principal },
+        { type: 'leaderboard' },
+      ]
+    : [
+        { type: 'dashboard' },
+        { type: 'history' },
+        { type: 'stats' },
+        { type: 'leaderboard' },
+      ];
+
+  await dataCache.invalidateMany(keys);
+  if (__DEV__) console.log('[CACHE] Invalidated after ride');
+}
+
 export async function invalidateDashboardCache(principal?: string): Promise<void> {
   await dataCache.invalidate('dashboard', principal);
   if (__DEV__) console.log('[CACHE] Invalidated dashboard cache');
 }
 
-/**
- * Invalidate profile cache
- * Call after updating profile information
- */
 export async function invalidateProfileCache(principal?: string): Promise<void> {
-  await dataCache.invalidate('profile', principal);
-  await dataCache.invalidate('dashboard', principal);
+  const keys: CacheKeyRef[] = principal
+    ? [
+        { type: 'profile', identifier: principal },
+        { type: 'dashboard', identifier: principal },
+      ]
+    : [{ type: 'profile' }, { type: 'dashboard' }];
+  await dataCache.invalidateMany(keys);
   if (__DEV__) console.log('[CACHE] Invalidated profile cache');
 }
 
-/**
- * Invalidate staking cache
- * Call after staking/unstaking actions
- */
-export async function invalidateStakingCache(principal?: string): Promise<void> {
-  await dataCache.invalidate('staking', principal);
-  await dataCache.invalidate('dashboard', principal);
-  await dataCache.invalidate('wallet', principal);
-  if (__DEV__) console.log('[CACHE] Invalidated staking cache');
-}
-
-/**
- * Invalidate groups/pools cache
- * Call after joining/leaving groups
- */
-export async function invalidateGroupsCache(): Promise<void> {
-  await dataCache.invalidateType('groups');
-  if (__DEV__) console.log('[CACHE] Invalidated groups cache');
-}
-
-/**
- * Invalidate friends cache
- * Call after friend requests, accepts, rejects, or removals
- */
 export async function invalidateFriendsCache(principal?: string): Promise<void> {
   await dataCache.invalidate('friends', principal);
   if (__DEV__) console.log('[CACHE] Invalidated friends cache');
