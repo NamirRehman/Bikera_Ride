@@ -19,7 +19,8 @@ const TAB_META: Record<
   { label: string; icon: keyof typeof Ionicons.glyphMap; iconFocused: keyof typeof Ionicons.glyphMap }
 > = {
   Dashboard: { label: 'Home', icon: 'home-outline', iconFocused: 'home' },
-  Track: { label: 'Track', icon: 'navigate-outline', iconFocused: 'navigate' },
+  // Shown to riders as "Ride"; the route keeps its name so existing navigate('Track') calls work.
+  Track: { label: 'Ride', icon: 'bicycle-outline', iconFocused: 'bicycle' },
   Friends: { label: 'Friends', icon: 'people-outline', iconFocused: 'people' },
   Leaderboard: { label: 'Ranks', icon: 'trophy-outline', iconFocused: 'trophy' },
   More: { label: 'More', icon: 'grid-outline', iconFocused: 'grid' },

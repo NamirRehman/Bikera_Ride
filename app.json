@@ -48,7 +48,7 @@
       "infoPlist": {
         "CFBundleDisplayName": "Bikera",
         "CFBundleName": "Bikera",
-        "NSCameraUsageDescription": "This app uses the camera for profile pictures and ride validation.",
+        "NSCameraUsageDescription": "Bikera uses the camera to scan the QR code on partner bikes.",
         "NSLocationWhenInUseUsageDescription": "This app uses your location to track bike rides and validate routes.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app uses your location to track bike rides and validate routes, even when the app is in the background.",
         "NSMotionUsageDescription": "This app uses motion sensors to detect and track bike rides.",
@@ -163,6 +163,14 @@
           "ios": {
             "deploymentTarget": "15.1"
           }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Bikera uses the camera to scan the QR code on partner bikes.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       [

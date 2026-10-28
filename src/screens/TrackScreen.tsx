@@ -20,6 +20,7 @@ import { ShadowWorkerService } from '../services/ShadowWorkerService';
 import { getGPSPointBatcher } from '../services/gpsPointBatcher';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { rideAutoStart } from '../services/rideAutoStart';
+import { rideFromPoints, saveLocalRide, type RidePoint } from '../services/rideFiles';
 
 const { width } = Dimensions.get('window');
 
@@ -82,6 +83,8 @@ export function TrackScreen() {
   const sessionIdRef = useRef<string | null>(null);
   const lastPointRef = useRef<{ lat: number; lon: number; ts: number } | null>(null);
   const routePointsRef = useRef<Array<{ latitude: number; longitude: number; timestamp: number; accuracy?: number }>>([]);
+  // The whole route of this ride, kept on the device so it can be exported as GPX from Ride Files.
+  const fullRouteRef = useRef<RidePoint[]>([]);
   const sessionRef = useRef<SessionData>(session);
   const startTimeRef = useRef<number | null>(null);
   const pausedDurationRef = useRef<number>(0);
@@ -800,6 +803,10 @@ export function TrackScreen() {
       };
     });
 
+    if (fullRouteRef.current.length < 100_000) {
+      fullRouteRef.current.push({ latitude, longitude, timestampMs: ts });
+    }
+
     // Also add to routePointsRef for backward compatibility (keep for display/logging)
     routePointsRef.current.push({
       latitude,
@@ -938,6 +945,7 @@ export function TrackScreen() {
         calories: 0,
       });
       routePointsRef.current = [];
+      fullRouteRef.current = [];
       lastPointRef.current = null;
       startTimeRef.current = Date.now();
       pausedDurationRef.current = 0;
@@ -1224,6 +1232,21 @@ export function TrackScreen() {
       addLog('info', 'Guest mode: skipped account save');
     }
 
+    // Keep the full route on this device so it can be exported as GPX (Ride Files).
+    const route = fullRouteRef.current;
+    fullRouteRef.current = [];
+    if (route.length >= 2) {
+      try {
+        await saveLocalRide(
+          rideFromPoints(`Bikera ride ${new Date(route[0].timestampMs).toLocaleString()}`, route),
+          principal || ''
+        );
+        addLog('info', `Saved ${route.length} route points to Ride Files`);
+      } catch (saveError) {
+        addLog('warn', `Could not save route to Ride Files: ${String(saveError)}`);
+      }
+    }
+
     // Clear cache after sending (matches web app)
     cachedRideDataRef.current = {
       distance: 0,
@@ -1299,7 +1322,7 @@ export function TrackScreen() {
         <View style={styles.headerOverlay}>
           <View style={styles.headerTopRow}>
             <View style={styles.headerTitleBlock}>
-              <Text style={styles.headerTitle}>Track Ride</Text>
+              <Text style={styles.headerTitle}>Ride</Text>
               {!principal || isGuest ? (
                 <Text style={styles.guestHint}>Guest — sign in to track rides</Text>
               ) : null}

@@ -18,4 +18,6 @@ export type MoreStackParamList = {
   History: undefined;
   Wallet: undefined;
   Profile: undefined;
+  RideFiles: undefined;
+  ScanBike: undefined;
 };

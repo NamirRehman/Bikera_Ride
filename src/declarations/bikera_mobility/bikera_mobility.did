@@ -1,0 +1,233 @@
+type UpsertOperatorRequest = 
+ record {
+   attributionWindowMinutes: nat;
+   capabilities: OperatorCapabilities;
+   commissionBps: nat;
+   id: text;
+   name: text;
+   systems: vec GbfsSystem;
+   website: text;
+ };
+type Timestamp = int;
+type Result_6 = 
+ variant {
+   err: text;
+   ok: OperatorLedger;
+ };
+type Result_5 = 
+ variant {
+   err: text;
+   ok: vec Handoff;
+ };
+type Result_4 = 
+ variant {
+   err: text;
+   ok: vec PartnerRide;
+ };
+type Result_3 = 
+ variant {
+   err: text;
+   ok: Handoff;
+ };
+type Result_2 = 
+ variant {
+   err: text;
+   ok: PartnerRide;
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: Operator;
+ };
+type Reconciliation = 
+ record {
+   commissionMinor: nat;
+   currency: text;
+   operatorFareMinor: nat;
+   reconciledAt: Timestamp;
+   reconciledBy: principal;
+   reference: text;
+ };
+type ReconcileRequest = 
+ record {
+   commissionMinor: nat;
+   currency: text;
+   operatorFareMinor: nat;
+   reference: text;
+ };
+type PartnerRideReport = 
+ record {
+   confidencePercent: nat;
+   distanceM: nat;
+   endTime: Timestamp;
+   estimatedFare: opt FareEstimate;
+   evidenceHash: text;
+   handoffId: opt text;
+   operatorId: text;
+   rideSessionId: opt text;
+   rider: principal;
+   signal: AttributionSignal;
+   startTime: Timestamp;
+   systemId: text;
+ };
+type PartnerRide = 
+ record {
+   commissionBps: nat;
+   commissionEligible: bool;
+   confidencePercent: nat;
+   distanceM: nat;
+   endTime: Timestamp;
+   estimatedCommissionMinor: nat;
+   estimatedFare: opt FareEstimate;
+   evidenceHash: text;
+   handoffId: opt text;
+   id: text;
+   operatorId: text;
+   reconciliation: opt Reconciliation;
+   recordedAt: Timestamp;
+   rideSessionId: opt text;
+   rider: principal;
+   signal: AttributionSignal;
+   startTime: Timestamp;
+   systemId: text;
+ };
+type OperatorStatus = 
+ variant {
+   Active;
+   Paused;
+ };
+type OperatorLedger = 
+ record {
+   attributedRides: nat;
+   commissionEligibleRides: nat;
+   fromTs: Timestamp;
+   handoffs: nat;
+   operatorId: text;
+   reconciledRides: nat;
+   toTs: Timestamp;
+   totalDistanceM: nat;
+   totals: vec CurrencyTotals;
+ };
+type OperatorCapabilities = 
+ record {
+   deepLinks: bool;
+   gbfs: bool;
+   inAppUnlock: bool;
+   partnerApi: bool;
+ };
+type Operator = 
+ record {
+   attributionWindowMinutes: nat;
+   capabilities: OperatorCapabilities;
+   commissionBps: nat;
+   createdAt: Timestamp;
+   id: text;
+   name: text;
+   status: OperatorStatus;
+   systems: vec GbfsSystem;
+   updatedAt: Timestamp;
+   website: text;
+ };
+type HandoffStatus = 
+ variant {
+   Attributed: text;
+   Open;
+ };
+type HandoffRequest = 
+ record {
+   latitude: opt float64;
+   longitude: opt float64;
+   operatorId: text;
+   stationId: opt text;
+   systemId: text;
+   vehicleId: opt text;
+   vehicleTypeId: opt text;
+ };
+type Handoff = 
+ record {
+   createdAt: Timestamp;
+   id: text;
+   latitude: opt float64;
+   longitude: opt float64;
+   operatorId: text;
+   rider: principal;
+   stationId: opt text;
+   status: HandoffStatus;
+   systemId: text;
+   vehicleId: opt text;
+   vehicleTypeId: opt text;
+ };
+type GbfsSystem = 
+ record {
+   city: text;
+   countryCode: text;
+   gbfsUrl: text;
+   systemId: text;
+ };
+type FareEstimate = 
+ record {
+   amountMinor: nat;
+   currency: text;
+   pricingPlanId: opt text;
+ };
+type CurrencyTotals = 
+ record {
+   currency: text;
+   estimatedCommissionMinor: nat;
+   estimatedFareMinor: nat;
+   reconciledCommissionMinor: nat;
+   reconciledFareMinor: nat;
+ };
+type AttributionSignal = 
+ variant {
+   DeepLinkHandoff;
+   Geofence;
+   OperatorReport;
+   PromoCode;
+ };
+service : {
+  addAdminPrincipal: (principal) -> (Result_1);
+  addTrustedAttributor: (principal) -> (Result_1);
+  /// Erase a rider's hand-offs and partner rides (the rider or an admin). Ledger totals for
+  /// periods already invoiced are unaffected - those live in the operator's invoices.
+  eraseRiderData: (principal) -> (Result_1);
+  getMyHandoffs: (opt nat) -> (vec Handoff) query;
+  getMyPartnerRides: (opt nat) -> (vec PartnerRide) query;
+  getOperator: (text) -> (opt Operator) query;
+  /// What an operator owes Bikera over a period - the figures an invoice is drawn up from.
+  getOperatorLedger: (text, Timestamp, Timestamp) -> (Result_6) query;
+  getStats: () ->
+   (record {
+      handoffs: nat;
+      operators: nat;
+      partnerRides: nat;
+      trustedAttributors: nat;
+    }) query;
+  getTrustedAttributors: () -> (vec principal) query;
+  /// Hand-offs that could still be credited (window plus upload grace), oldest first. Attributors only.
+  listOpenHandoffs: (Timestamp, opt nat) -> (Result_5) query;
+  /// Every operator, active or paused. Public: the app shows active ones.
+  listOperators: () -> (vec Operator) query;
+  /// Partner rides for an operator over [fromTs, toTs] by ride start, newest first. Admin only.
+  listPartnerRides: (text, Timestamp, Timestamp, opt nat, opt nat) ->
+   (Result_4) query;
+  /// Record what the operator actually charged and what was invoiced for a ride.
+  reconcilePartnerRide: (text, ReconcileRequest) -> (Result_2);
+  /// Record that the signed-in rider is being sent to an operator's app for a vehicle. Called
+  /// by the app just before it opens the operator's deep link.
+  recordHandoff: (HandoffRequest) -> (Result_3);
+  /// Record a partner ride. Attributors only. Idempotent: a hand-off, and a ride session, can
+  /// each be credited once; re-reporting either returns the ride already recorded.
+  recordPartnerRide: (PartnerRideReport) -> (Result_2);
+  removeAdminPrincipal: (principal) -> (Result_1);
+  removeTrustedAttributor: (principal) -> (Result_1);
+  /// Pause or resume an operator. A paused operator accepts no new hand-offs or rides.
+  setOperatorStatus: (text, OperatorStatus) -> (Result_1);
+  /// Create or replace an operator's configuration. Admin only.
+  upsertOperator: (UpsertOperatorRequest) -> (Result);
+}

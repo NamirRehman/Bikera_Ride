@@ -45,6 +45,11 @@ type UserPreferences =
    units: text;
    voiceGuidance: bool;
  };
+type UserIdentity = 
+ record {
+   id: UserId;
+   username: text;
+ };
 type UserId = principal;
 type UserDashboardSnapshot = 
  record {
@@ -56,11 +61,6 @@ type UserDashboardSnapshot =
    referralCode: text;
    stats: UserStats;
  };
-type ReferralSummary =
- record {
-   totalReferrals: nat;
-   referredUsers: vec UserId;
- };
 type TokenAmount = nat;
 type Timestamp = int;
 type Speed = nat;
@@ -70,6 +70,11 @@ type SocialLinks =
    strava: opt text;
    twitter: opt text;
    website: opt text;
+ };
+type RideVerificationPolicy = 
+ record {
+   maxAvgSpeedKmh: nat;
+   maxDailyDistanceM: nat;
  };
 type RideSummary = 
  record {
@@ -95,7 +100,31 @@ type RideSummary =
     };
    timestamp: Timestamp;
  };
-type Result_2 = 
+type RideProvenance = 
+ record {
+   attestations: vec AttestationSource__1;
+   deviceRecorded: bool;
+ };
+type RideMatchPolicy = 
+ record {
+   matchDistanceTolerancePercent: nat;
+   matchWindowSeconds: nat;
+ };
+type RideAttestation = 
+ record {
+   distance: Distance;
+   endTime: Timestamp;
+   evidenceHash: text;
+   externalId: text;
+   sourceAccountHash: opt text;
+   startTime: Timestamp;
+ };
+type Result_5 = 
+ variant {
+   err: text;
+   ok: ExternalLinkGrant;
+ };
+type Result_4 = 
  variant {
    err: text;
    ok:
@@ -110,15 +139,40 @@ type Result_2 =
       version: text;
     };
  };
-type Result_1 = 
+type Result_3 = 
+ variant {
+   err: text;
+   ok: vec ExternalLink;
+ };
+type Result_2 = 
  variant {
    err: text;
    ok: UserProfile;
+ };
+type Result_1 = 
+ variant {
+   err: text;
+   ok: AttestationReceipt;
  };
 type Result = 
  variant {
    err: text;
    ok: text;
+ };
+type ReferralSummary = 
+ record {
+   lastReferredAt: opt Timestamp;
+   referredUsers: vec UserId;
+   totalReferrals: nat;
+ };
+type PublicCard = 
+ record {
+   avatar: opt text;
+   country: opt text;
+   totalDistance: Distance;
+   totalXP: nat;
+   userId: UserId;
+   username: text;
  };
 type PrivacySettings = 
  record {
@@ -154,7 +208,66 @@ type FriendRequest =
    status: text;
    to: UserId;
  };
+type ExternalLinkGrant = 
+ record {
+   link: ExternalLink;
+   rider: UserId;
+ };
+type ExternalLink = 
+ record {
+   accountHash: text;
+   attestationCount: nat;
+   lastAttestationAt: opt Timestamp;
+   linkedAt: Timestamp;
+   source: AttestationSource;
+ };
+type DistanceInRange = 
+ record {
+   activeMeters: Distance;
+   activeSessions: nat;
+   attestedMeters: Distance;
+   attestedSessions: nat;
+   completedMeters: Distance;
+   completedSessions: nat;
+   confirmedMeters: Distance;
+   confirmedSessions: nat;
+   fromTs: Timestamp;
+   rejectedMeters: Distance;
+   rejectedSessions: nat;
+   toTs: Timestamp;
+ };
 type Distance = nat;
+type AttestationSource__1 = 
+ variant {
+   AppleHealth;
+   Garmin;
+   GoogleFit;
+   Other: text;
+   ShadowWorker;
+   Strava;
+ };
+type AttestationSource = 
+ variant {
+   AppleHealth;
+   Garmin;
+   GoogleFit;
+   Other: text;
+   ShadowWorker;
+   Strava;
+ };
+type AttestationReceipt = 
+ record {
+   distance: Distance;
+   outcome: AttestationOutcome;
+   provenance: RideProvenance;
+   sessionId: text;
+ };
+type AttestationOutcome = 
+ variant {
+   AlreadyRecorded;
+   Inserted;
+   Matched;
+ };
 type ActivitySession = 
  record {
    avgSpeed: Speed;
@@ -164,15 +277,32 @@ type ActivitySession =
    id: text;
    isActive: bool;
    maxSpeed: Speed;
+   provenance: RideProvenance;
    route: vec LocationPoint;
    startTime: Timestamp;
    userId: UserId;
  };
 service : {
+  addAdminPrincipal: (principal) -> (Result);
+  addTrustedRideReader: (principal) -> (Result);
+  addTrustedRideWriter: (principal) -> (Result);
+  /// Start linking an external account (e.g. Strava). Returns a single-use nonce, valid for 15
+  /// minutes, that the attestation service redeems in `completeExternalLink`. Issuing a new
+  /// nonce voids any earlier one for the same source.
+  beginExternalLink: (AttestationSource) -> (Result);
   /// Clear user data (admin only)
   clearUserData: (UserId) -> (Result);
+  /// Redeem a link nonce once the rider has authorised the external account. Allowlisted
+  /// attestation services only. One external account can be linked to exactly one rider.
+  completeExternalLink: (text, AttestationSource, text) -> (Result_5);
   /// Deactivate user (admin only)
   deactivateUser: (UserId) -> (Result);
+  /// Delete a user by principal (the user themself or an admin).
+  /// 
+  /// This used to have no access check at all, which let anyone erase any rider's ride history -
+  /// including the verified distance an open stake settles on, so a rival could get a rider
+  /// slashed. Same rule as `eraseUserDataGDPR` now.
+  deleteUserByPrincipal: (UserId) -> (Result);
   endActivitySession: (text, UserId) -> (Result);
   /// Complete GDPR-compliant data erasure (user or admin)
   /// This will cascade delete across all canisters
@@ -189,19 +319,39 @@ service : {
   getActivitySessions: (UserId, opt nat, opt nat) ->
    (vec ActivitySession) query;
   /// Get canister status including cycle balance (admin only)
-  getCanisterStatus: () -> (Result_2);
+  getCanisterStatus: () -> (Result_4);
   getCurrentUserProfile: (UserId) -> (opt UserProfile) query;
-  getReferralSummary: (UserId) -> (ReferralSummary) query;
+  /// Sum a user's session distance over [fromTs, toTs].
+  /// 
+  /// A session counts when its `startTime` falls inside the window. Anchoring on the start
+  /// avoids double counting a ride across two adjacent windows, and it is stable: a session's
+  /// start never moves, whereas its end does while the ride is in progress.
+  /// 
+  /// Unlike `getActivitySessions` this is not paginated - it has to be able to answer for a
+  /// full 52-week staking period.
+  getDistanceInRange: (UserId, Timestamp, Timestamp) ->
+   (DistanceInRange) query;
+  /// Linked accounts. Riders can read their own; admins and attestation services any rider's.
+  getExternalLinks: (UserId) -> (Result_3) query;
   getFriendRequests: (UserId, opt nat) -> (vec FriendRequest) query;
   getFriends: (UserId) -> (vec UserId) query;
   getLeaderboard: (nat) -> (vec record {
                                   UserId;
                                   Distance;
                                 }) query;
+  getPublicCards: (vec UserId) -> (vec PublicCard) query;
+  getReferralSummary: (UserId) -> (ReferralSummary) query;
+  getRideMatchPolicy: () -> (RideMatchPolicy) query;
+  getRideVerificationPolicy: () -> (RideVerificationPolicy) query;
   /// Get Solana address for user
   getSolanaAddress: (UserId) -> (opt text) query;
   /// Get total count of registered users
   getTotalUsersCount: () -> (nat) query;
+  getTrustedRideReaders: () -> (vec principal) query;
+  getTrustedRideWriters: () -> (vec principal) query;
+  /// Resolve the public identity behind an exact username. Matching is case-insensitive so a
+  /// group invite to `@Rider` cannot accidentally target a different `rider` account.
+  getUserByUsername: (text) -> (opt UserIdentity) query;
   /// Get complete user dashboard data in single query
   /// This replaces multiple separate queries:
   /// - getUserProfile()
@@ -212,22 +362,63 @@ service : {
   getUserDashboardSnapshot: (UserId) -> (opt UserDashboardSnapshot) query;
   getUserProfile: (UserId) -> (opt UserProfile) query;
   getUserStats: (UserId) -> (UserStats) query;
+  /// Convenience wrapper returning just the settlement figure, in metres.
+  getVerifiedDistanceInRange: (UserId, Timestamp, Timestamp) ->
+   (Distance) query;
   /// Record user activity (called when user submits movement data)
   recordUserActivity: (UserId) -> ();
   /// Register a new user with profile information
-  registerUser: (text, opt text, opt text, opt text, UserId) -> (Result_1);
+  registerUser: (text, opt text, opt text, opt text, UserId) -> (Result_2);
+  removeAdminPrincipal: (principal) -> (Result);
+  removeTrustedRideReader: (principal) -> (Result);
+  removeTrustedRideWriter: (principal) -> (Result);
   respondToFriendRequest: (text, bool, UserId) -> (Result);
+  /// Withdraw an attestation - e.g. the rider deleted or edited the activity at the source. A ride
+  /// that existed only because of this attestation is removed; a ride the device also recorded
+  /// keeps its device record, at the conservative distance it was confirmed at. Idempotent.
+  revokeAttestedRide: (UserId, AttestationSource, text) -> (Result);
   /// Send friend request to another user
   sendFriendRequest: (UserId, UserId) -> (Result);
+  /// How close a device ride and an attestation must be to count as the same ride.
+  setRideMatchPolicy: (RideMatchPolicy) -> (Result);
+  /// Takes effect for every measurement made afterwards, including stakes not yet settled.
+  setRideVerificationPolicy: (RideVerificationPolicy) -> (Result);
   /// Start a new activity tracking session
   startActivitySession: (UserId) -> (Result);
+  /// Record that an independent source confirmed a ride. Allowlisted attestation services only.
+  /// 
+  /// The same physical ride usually reaches Bikera twice: once from the rider's phone and once
+  /// from the source. If the attestation matches a stored ride (see `RideMatchPolicy`), that ride
+  /// is upgraded in place - it gains the attestation, keeps the LOWER of the two distances, and is
+  /// closed so nothing can append to it. Otherwise the ride is stored on its own. It is never
+  /// stored twice, and re-submitting the same attestation is a no-op.
+  /// 
+  /// The ride verification rules (speed, overlap, daily cap) still apply when distance is read:
+  /// an attestation is extra evidence, never an override.
+  submitAttestedRide: (UserId, AttestationSource, RideAttestation) ->
+   (Result_1);
+  /// Update activity session with summary (batch update)
+  /// More efficient than updating point-by-point
+  /// Reduces canister writes by 50-100X
+  /// Record one finished ride as its own closed session.
+  /// 
+  /// The call to use for any completed ride, including one recorded offline and uploaded later.
+  /// `updateActivitySessionWithSummary` appends to whichever session is still open, so a ride
+  /// uploaded that way can be credited at an earlier ride's start time - and the start time is
+  /// what decides whether a ride counts toward a Movement Stake. This never merges: the ride is
+  /// stored at its own start and end.
+  /// 
+  /// Authenticated (a rider can only submit their own rides) and idempotent: the session id is
+  /// derived from the ride itself, so re-submitting after a timeout returns the existing id
+  /// instead of counting the distance twice.
+  submitCompletedRide: (RideSummary) -> (Result);
+  /// Disconnect an external account. Rides it already attested stay attested: they were verified
+  /// when they happened, and a stake must not change after the fact because of a later unlink.
+  unlinkExternalAccount: (UserId, AttestationSource) -> (Result);
   updateActivitySession: (text, Distance, Speed, Speed, opt LocationPoint,
    UserId) -> (Result);
   updateActivitySessionWithPoints: (text, Distance, Speed, Speed,
    vec LocationPoint, UserId) -> (Result);
-  /// Update activity session with summary (batch update)
-  /// More efficient than updating point-by-point
-  /// Reduces canister writes by 50-100X
   updateActivitySessionWithSummary: (UserId, RideSummary) -> (Result);
   updatePreferences: (UserPreferences, UserId) -> (Result);
   updatePrivacySettings: (PrivacySettings, UserId) -> (Result);

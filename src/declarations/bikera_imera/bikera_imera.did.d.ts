@@ -83,6 +83,21 @@ export interface BikeraIMERA {
   'getSolanaClaimBalance' : ActorMethod<[], Tokens>,
   'getTotalClaimedToSolana' : ActorMethod<[], Tokens>,
   'getTotalSupply' : ActorMethod<[], Tokens>,
+  'getAccountTransactions' : ActorMethod<
+    [Account, bigint],
+    Array<
+      {
+        'to' : Account,
+        'fee' : Tokens,
+        'from' : Account,
+        'kind' : string,
+        'memo' : [] | [Memo],
+        'timestamp' : Timestamp,
+        'index' : bigint,
+        'amount' : Tokens,
+      }
+    >
+  >,
   'getTransactionHistory' : ActorMethod<
     [[] | [bigint]],
     Array<

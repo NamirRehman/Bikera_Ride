@@ -4,6 +4,7 @@ import type { IDL } from '@dfinity/candid';
 
 export interface ActivitySession {
   'id' : string,
+  'provenance' : RideProvenance,
   'startTime' : Timestamp,
   'duration' : bigint,
   'avgSpeed' : Speed,
@@ -14,7 +15,50 @@ export interface ActivitySession {
   'isActive' : boolean,
   'route' : Array<LocationPoint>,
 }
+export type AttestationOutcome = { 'AlreadyRecorded' : null } |
+  { 'Matched' : null } |
+  { 'Inserted' : null };
+export interface AttestationReceipt {
+  'provenance' : RideProvenance,
+  'distance' : Distance,
+  'sessionId' : string,
+  'outcome' : AttestationOutcome,
+}
+export type AttestationSource = { 'ShadowWorker' : null } |
+  { 'Strava' : null } |
+  { 'Garmin' : null } |
+  { 'Other' : string } |
+  { 'AppleHealth' : null } |
+  { 'GoogleFit' : null };
+export type AttestationSource__1 = { 'ShadowWorker' : null } |
+  { 'Strava' : null } |
+  { 'Garmin' : null } |
+  { 'Other' : string } |
+  { 'AppleHealth' : null } |
+  { 'GoogleFit' : null };
 export type Distance = bigint;
+export interface DistanceInRange {
+  'attestedMeters' : Distance,
+  'confirmedSessions' : bigint,
+  'completedSessions' : bigint,
+  'rejectedSessions' : bigint,
+  'rejectedMeters' : Distance,
+  'toTs' : Timestamp,
+  'attestedSessions' : bigint,
+  'completedMeters' : Distance,
+  'activeMeters' : Distance,
+  'confirmedMeters' : Distance,
+  'activeSessions' : bigint,
+  'fromTs' : Timestamp,
+}
+export interface ExternalLink {
+  'linkedAt' : Timestamp,
+  'lastAttestationAt' : [] | [Timestamp],
+  'source' : AttestationSource,
+  'attestationCount' : bigint,
+  'accountHash' : string,
+}
+export interface ExternalLinkGrant { 'link' : ExternalLink, 'rider' : UserId }
 export interface FriendRequest {
   'id' : string,
   'to' : UserId,
@@ -45,11 +89,28 @@ export interface PrivacySettings {
   'showDistance' : boolean,
   'showSpeed' : boolean,
 }
+export interface PublicCard {
+  'country' : [] | [string],
+  'username' : string,
+  'userId' : UserId,
+  'totalXP' : bigint,
+  'totalDistance' : Distance,
+  'avatar' : [] | [string],
+}
+export interface ReferralSummary {
+  'totalReferrals' : bigint,
+  'referredUsers' : Array<UserId>,
+  'lastReferredAt' : [] | [Timestamp],
+}
 export type Result = { 'ok' : string } |
   { 'err' : string };
-export type Result_1 = { 'ok' : UserProfile } |
+export type Result_1 = { 'ok' : AttestationReceipt } |
   { 'err' : string };
-export type Result_2 = {
+export type Result_2 = { 'ok' : UserProfile } |
+  { 'err' : string };
+export type Result_3 = { 'ok' : Array<ExternalLink> } |
+  { 'err' : string };
+export type Result_4 = {
     'ok' : {
       'canisterName' : string,
       'version' : string,
@@ -62,6 +123,24 @@ export type Result_2 = {
     }
   } |
   { 'err' : string };
+export type Result_5 = { 'ok' : ExternalLinkGrant } |
+  { 'err' : string };
+export interface RideAttestation {
+  'startTime' : Timestamp,
+  'endTime' : Timestamp,
+  'externalId' : string,
+  'sourceAccountHash' : [] | [string],
+  'distance' : Distance,
+  'evidenceHash' : string,
+}
+export interface RideMatchPolicy {
+  'matchDistanceTolerancePercent' : bigint,
+  'matchWindowSeconds' : bigint,
+}
+export interface RideProvenance {
+  'attestations' : Array<AttestationSource__1>,
+  'deviceRecorded' : boolean,
+}
 export interface RideSummary {
   'duration' : bigint,
   'avgSpeed' : Speed,
@@ -83,6 +162,10 @@ export interface RideSummary {
     'accuracy' : [] | [number],
   },
 }
+export interface RideVerificationPolicy {
+  'maxDailyDistanceM' : bigint,
+  'maxAvgSpeedKmh' : bigint,
+}
 export interface SocialLinks {
   'strava' : [] | [string],
   'twitter' : [] | [string],
@@ -101,11 +184,8 @@ export interface UserDashboardSnapshot {
   'friends' : Array<UserId>,
   'profile' : UserProfile,
 }
-export interface ReferralSummary {
-  'totalReferrals' : bigint,
-  'referredUsers' : Array<UserId>,
-}
 export type UserId = Principal;
+export interface UserIdentity { 'id' : UserId, 'username' : string }
 export interface UserPreferences {
   'theme' : string,
   'notifications' : NotificationSettings,
@@ -151,8 +231,17 @@ export interface UserStats {
   'currentStreak' : bigint,
 }
 export interface _SERVICE {
+  'addAdminPrincipal' : ActorMethod<[Principal], Result>,
+  'addTrustedRideReader' : ActorMethod<[Principal], Result>,
+  'addTrustedRideWriter' : ActorMethod<[Principal], Result>,
+  'beginExternalLink' : ActorMethod<[AttestationSource], Result>,
   'clearUserData' : ActorMethod<[UserId], Result>,
+  'completeExternalLink' : ActorMethod<
+    [string, AttestationSource, string],
+    Result_5
+  >,
   'deactivateUser' : ActorMethod<[UserId], Result>,
+  'deleteUserByPrincipal' : ActorMethod<[UserId], Result>,
   'endActivitySession' : ActorMethod<[string, UserId], Result>,
   'eraseUserDataGDPR' : ActorMethod<[UserId], Result>,
   'getActiveUsers' : ActorMethod<[Timestamp], Array<UserId>>,
@@ -162,31 +251,61 @@ export interface _SERVICE {
     [UserId, [] | [bigint], [] | [bigint]],
     Array<ActivitySession>
   >,
-  'getCanisterStatus' : ActorMethod<[], Result_2>,
+  'getCanisterStatus' : ActorMethod<[], Result_4>,
   'getCurrentUserProfile' : ActorMethod<[UserId], [] | [UserProfile]>,
-  'getReferralSummary' : ActorMethod<[UserId], ReferralSummary>,
+  'getDistanceInRange' : ActorMethod<
+    [UserId, Timestamp, Timestamp],
+    DistanceInRange
+  >,
+  'getExternalLinks' : ActorMethod<[UserId], Result_3>,
   'getFriendRequests' : ActorMethod<
     [UserId, [] | [bigint]],
     Array<FriendRequest>
   >,
   'getFriends' : ActorMethod<[UserId], Array<UserId>>,
   'getLeaderboard' : ActorMethod<[bigint], Array<[UserId, Distance]>>,
+  'getPublicCards' : ActorMethod<[Array<UserId>], Array<PublicCard>>,
+  'getReferralSummary' : ActorMethod<[UserId], ReferralSummary>,
+  'getRideMatchPolicy' : ActorMethod<[], RideMatchPolicy>,
+  'getRideVerificationPolicy' : ActorMethod<[], RideVerificationPolicy>,
   'getSolanaAddress' : ActorMethod<[UserId], [] | [string]>,
   'getTotalUsersCount' : ActorMethod<[], bigint>,
+  'getTrustedRideReaders' : ActorMethod<[], Array<Principal>>,
+  'getTrustedRideWriters' : ActorMethod<[], Array<Principal>>,
+  'getUserByUsername' : ActorMethod<[string], [] | [UserIdentity]>,
   'getUserDashboardSnapshot' : ActorMethod<
     [UserId],
     [] | [UserDashboardSnapshot]
   >,
   'getUserProfile' : ActorMethod<[UserId], [] | [UserProfile]>,
   'getUserStats' : ActorMethod<[UserId], UserStats>,
+  'getVerifiedDistanceInRange' : ActorMethod<
+    [UserId, Timestamp, Timestamp],
+    Distance
+  >,
   'recordUserActivity' : ActorMethod<[UserId], undefined>,
   'registerUser' : ActorMethod<
     [string, [] | [string], [] | [string], [] | [string], UserId],
+    Result_2
+  >,
+  'removeAdminPrincipal' : ActorMethod<[Principal], Result>,
+  'removeTrustedRideReader' : ActorMethod<[Principal], Result>,
+  'removeTrustedRideWriter' : ActorMethod<[Principal], Result>,
+  'respondToFriendRequest' : ActorMethod<[string, boolean, UserId], Result>,
+  'revokeAttestedRide' : ActorMethod<
+    [UserId, AttestationSource, string],
+    Result
+  >,
+  'sendFriendRequest' : ActorMethod<[UserId, UserId], Result>,
+  'setRideMatchPolicy' : ActorMethod<[RideMatchPolicy], Result>,
+  'setRideVerificationPolicy' : ActorMethod<[RideVerificationPolicy], Result>,
+  'startActivitySession' : ActorMethod<[UserId], Result>,
+  'submitAttestedRide' : ActorMethod<
+    [UserId, AttestationSource, RideAttestation],
     Result_1
   >,
-  'respondToFriendRequest' : ActorMethod<[string, boolean, UserId], Result>,
-  'sendFriendRequest' : ActorMethod<[UserId, UserId], Result>,
-  'startActivitySession' : ActorMethod<[UserId], Result>,
+  'submitCompletedRide' : ActorMethod<[RideSummary], Result>,
+  'unlinkExternalAccount' : ActorMethod<[UserId, AttestationSource], Result>,
   'updateActivitySession' : ActorMethod<
     [string, Distance, Speed, Speed, [] | [LocationPoint], UserId],
     Result

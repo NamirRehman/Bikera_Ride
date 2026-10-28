@@ -12,6 +12,7 @@ import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
 import { useCachedData } from '../hooks/useCachedData';
+import { formatXp } from '../utils/format';
 
 interface UserXPProfile {
   userId: any;
@@ -340,7 +341,7 @@ export function PublicProfileScreen() {
             <View style={styles.statsGrid}>
               <View style={styles.statItem}>
                 <Text style={styles.statLabel}>Total XP</Text>
-                <Text style={styles.statValue}>{Number(xp.totalXP).toLocaleString()}</Text>
+                <Text style={styles.statValue}>{formatXp(xp.totalXP)}</Text>
               </View>
               {allow('totalDistance') && (
                 <View style={styles.statItem}>
@@ -354,7 +355,7 @@ export function PublicProfileScreen() {
               </View>
               <View style={styles.statItem}>
                 <Text style={styles.statLabel}>XP To Next Level</Text>
-                <Text style={styles.statValue}>{Number(xp.xpToNextLevel).toLocaleString()}</Text>
+                <Text style={styles.statValue}>{formatXp(xp.xpToNextLevel)}</Text>
               </View>
             </View>
           </Card>

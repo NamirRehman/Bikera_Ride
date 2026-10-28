@@ -9,6 +9,8 @@ import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import StatsHero from '../components/StatsHero';
 import QuickActions from '../components/QuickActions';
+import WalletSummary from '../components/WalletSummary';
+import { formatImera, formatXp } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { PressableScale, FadeInView } from '../components/motion';
@@ -59,10 +61,11 @@ export function DashboardScreen() {
 
   // Memoize quick actions to prevent re-creation
   const quickActions = useMemo(() => [
-    { label: 'Track ride', icon: 'navigate-outline', onPress: () => navigation.navigate('Track') },
+    { label: 'Start Ride', icon: 'bicycle', onPress: () => navigation.navigate('Track') },
     { label: 'Friends', icon: 'people-outline', onPress: () => navigation.navigate('Friends') },
     { label: 'Leaderboard', icon: 'trophy-outline', onPress: () => navigation.navigate('Leaderboard') },
     { label: 'Wallet', icon: 'wallet-outline', onPress: () => navigation.navigate('More', { screen: 'Wallet' }) },
+    { label: 'Scan a Bike', icon: 'qr-code-outline', onPress: () => navigation.navigate('More', { screen: 'ScanBike' }) },
   ], [navigation]);
 
   // Memoize formatted stats
@@ -72,15 +75,11 @@ export function DashboardScreen() {
   );
 
   const formattedXP = useMemo(
-    () => (stats.xp !== null ? stats.xp.toLocaleString() : '0'),
+    () => (stats.xp !== null ? formatXp(stats.xp) : '0'),
     [stats.xp]
   );
 
-  const formattedImera = useMemo(() => {
-    const value = stats.imera ?? 0;
-    if (value >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    return value.toFixed(2);
-  }, [stats.imera]);
+  const formattedImera = useMemo(() => formatImera(stats.imera ?? 0), [stats.imera]);
 
   // Helper functions
   const nsToMs = (v: any): number => {
@@ -249,8 +248,13 @@ export function DashboardScreen() {
     }
   }, [principal, dashboardData, dashboardLoading]);
 
+  const [walletRefreshKey, setWalletRefreshKey] = useState(0);
+  // Stable per signed-in rider, so the wallet card does not reload on every render.
+  const walletIdentity = useMemo(() => (principal ? getIdentity() : null), [principal, getIdentity]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    setWalletRefreshKey((k) => k + 1);
     await refetch();
     setRefreshing(false);
   }, [refetch]);
@@ -266,7 +270,7 @@ export function DashboardScreen() {
         subtitle={principal ? `ID: ${principal.slice(0, 10)}…` : isGuest ? 'Exploring without signing in' : undefined}
       />
 
-      <GuestBanner message="Home, Track, Friends, Ranks, and More all work. Sign in is at the top of More if you want to save rides and rewards." />
+      <GuestBanner message="Home, Ride, Friends, Ranks, and More all work. Sign in is at the top of More if you want to save rides and rewards." />
 
       <View style={styles.content}>
         <FadeInView variant="up">
@@ -287,6 +291,17 @@ export function DashboardScreen() {
           )}
         </FadeInView>
 
+        {principal ? (
+          <FadeInView delay={40}>
+            <WalletSummary
+              principal={principal}
+              identity={walletIdentity}
+              refreshKey={walletRefreshKey}
+              onOpenWallet={() => navigation.navigate('More', { screen: 'Wallet' })}
+            />
+          </FadeInView>
+        ) : null}
+
         <FadeInView delay={80} style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>Quick actions</Text>
           <QuickActions actions={quickActions} />
@@ -298,7 +313,7 @@ export function DashboardScreen() {
             style={styles.rideCard}
             scaleTo={0.97}
             accessibilityRole="button"
-            accessibilityLabel="Start tracking a ride"
+            accessibilityLabel="Start a ride"
           >
             <LinearGradient
               colors={[colors.brandIndigo, colors.brandPurple, colors.brandBlue200]}

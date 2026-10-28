@@ -17,6 +17,12 @@ export interface LevelConfig {
   'benefits' : Array<string>,
   'requiredXP' : XPAmount,
 }
+export interface PublicXPCard {
+  'userId' : UserId,
+  'totalXP' : XPAmount,
+  'totalDistance' : Distance,
+  'currentLevel' : bigint,
+}
 export type Result = { 'ok' : bigint } |
   { 'err' : string };
 export type Result_1 = { 'ok' : string } |
@@ -55,6 +61,11 @@ export interface UserXPProfile {
   'xpToNextLevel' : XPAmount,
 }
 export type XPAmount = bigint;
+export interface XPMatchRow {
+  'distance' : [] | [Distance],
+  'timestamp' : Timestamp,
+  'amount' : XPAmount,
+}
 export type XPReason = { 'Achievement' : string } |
   { 'Distance' : Distance } |
   { 'Mining' : bigint } |
@@ -79,9 +90,11 @@ export interface XPTransaction {
 }
 export interface _SERVICE {
   'addAchievementXP' : ActorMethod<[UserId, string], Result_3>,
+  'addAdminPrincipal' : ActorMethod<[Principal], Result_1>,
   'addDistanceXP' : ActorMethod<[UserId, Distance], Result_3>,
   'addDistanceXPBatch' : ActorMethod<[UserId, Distance], Result_3>,
   'addMiningBonus' : ActorMethod<[UserId, XPAmount], Result_3>,
+  'addMiningBonuses' : ActorMethod<[bigint, Array<UserId>, XPAmount], Result_1>,
   'addReferralBonus' : ActorMethod<[UserId, UserId], Result_3>,
   'addXP' : ActorMethod<
     [UserId, XPAmount, XPReason, [] | [Distance], [] | [string]],
@@ -91,6 +104,12 @@ export interface _SERVICE {
   'clearOldTransactions' : ActorMethod<[], Result_1>,
   'getAchievementDefinitions' : ActorMethod<[], Array<Achievement>>,
   'getAchievements' : ActorMethod<[UserId], Array<string>>,
+  'getBatchUserProfiles' : ActorMethod<
+    [Array<UserId>],
+    Array<
+      [UserId, { 'totalXP' : XPAmount, 'isActive' : boolean, 'level' : bigint }]
+    >
+  >,
   'getCanisterStatus' : ActorMethod<[], Result_2>,
   'getDailyXPClaimed' : ActorMethod<[UserId, Day], XPAmount>,
   'getLeaderboard' : ActorMethod<[bigint], Array<[UserId, XPAmount]>>,
@@ -101,10 +120,22 @@ export interface _SERVICE {
   'getLevel' : ActorMethod<[UserId], bigint>,
   'getLevelConfigs' : ActorMethod<[], Array<LevelConfig>>,
   'getPublicUserXPProfile' : ActorMethod<[UserId], UserXPProfile>,
+  'getPublicXPCards' : ActorMethod<[Array<UserId>], Array<PublicXPCard>>,
   'getReferralCount' : ActorMethod<[UserId], bigint>,
   'getStreakDays' : ActorMethod<[UserId], bigint>,
   'getTotalDistance' : ActorMethod<[UserId], Distance>,
   'getTotalXP' : ActorMethod<[UserId], XPAmount>,
+  'getUserProfileLite' : ActorMethod<
+    [UserId],
+    {
+      'totalXP' : XPAmount,
+      'lastActivity' : Timestamp,
+      'isActive' : boolean,
+      'level' : bigint,
+      'currentStreak' : bigint,
+    }
+  >,
+  'getXPMatchRows' : ActorMethod<[UserId, [] | [bigint]], Array<XPMatchRow>>,
   'getXPSnapshot' : ActorMethod<[UserId], XPSnapshot>,
   'getXPToNextLevel' : ActorMethod<[UserId], XPAmount>,
   'getXPTransactions' : ActorMethod<
@@ -112,6 +143,7 @@ export interface _SERVICE {
     Array<XPTransaction>
   >,
   'isAutomatedXPMintingActive' : ActorMethod<[], boolean>,
+  'removeAdminPrincipal' : ActorMethod<[Principal], Result_1>,
   'resetUserXP' : ActorMethod<[UserId], Result_1>,
   'startAutomatedXPMinting' : ActorMethod<[], Result_1>,
   'stopAutomatedXPMinting' : ActorMethod<[], Result_1>,

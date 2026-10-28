@@ -45,23 +45,9 @@ type RewardModel =
 type Result_9 = 
  variant {
    err: text;
-   ok: vec ParticipantScore;
- };
-type Result_8 = 
- variant {
-   err: text;
-   ok: record {
-         hasMore: bool;
-         leaderboard: vec ParticipantScore;
-         total: nat;
-       };
- };
-type Result_7 = 
- variant {
-   err: text;
    ok: vec Participant;
  };
-type Result_6 = 
+type Result_8 = 
  variant {
    err: text;
    ok: record {
@@ -70,12 +56,12 @@ type Result_6 =
          total: nat;
        };
  };
-type Result_5 = 
+type Result_7 = 
  variant {
    err: text;
    ok: DepositAccount;
  };
-type Result_4 = 
+type Result_6 = 
  variant {
    err: text;
    ok: record {
@@ -83,7 +69,7 @@ type Result_4 =
          teamB: TeamScore;
        };
  };
-type Result_3 = 
+type Result_5 = 
  variant {
    err: text;
    ok: record {
@@ -91,27 +77,32 @@ type Result_3 =
          teamB: TeamProgress;
        };
  };
-type Result_2 = 
+type Result_4 = 
  variant {
    err: text;
    ok: bool;
  };
-type Result_13 = 
+type Result_3 = 
+ variant {
+   err: text;
+   ok: JoinPoolResponse;
+ };
+type Result_2 = 
  variant {
    err: text;
    ok: nat;
  };
-type Result_12 = 
+type Result_14 = 
  variant {
    err: text;
    ok: Pool;
  };
-type Result_11 = 
+type Result_13 = 
  variant {
    err: text;
    ok: CreatePoolResponse;
  };
-type Result_10 = 
+type Result_12 = 
  variant {
    err: text;
    ok:
@@ -126,15 +117,43 @@ type Result_10 =
       version: text;
     };
  };
+type Result_11 = 
+ variant {
+   err: text;
+   ok: vec ParticipantScore;
+ };
+type Result_10 = 
+ variant {
+   err: text;
+   ok: record {
+         hasMore: bool;
+         leaderboard: vec ParticipantScore;
+         total: nat;
+       };
+ };
 type Result_1 = 
  variant {
    err: text;
-   ok: JoinPoolResponse;
+   ok: text;
  };
 type Result = 
  variant {
    err: text;
    ok: RideSubmission;
+ };
+type RaceStakeInfo = 
+ record {
+   amount: nat;
+   claimed: bool;
+   isWinner: bool;
+   pending: bool;
+   unlockAt: Timestamp;
+ };
+type RaceSeedRefundInfo = 
+ record {
+   amount: nat;
+   claimed: bool;
+   pending: bool;
  };
 type PoolVisibility = 
  variant {
@@ -165,6 +184,8 @@ type PoolSummary =
    poolType: PoolType;
    potAmount: nat;
    rewardModel: RewardModel;
+   seedAmount: nat;
+   stakeLockPolicy: bool;
    startTime: Timestamp;
    status: PoolStatus;
    title: text;
@@ -303,33 +324,70 @@ type CreatePoolRequest =
    visibility: PoolVisibility;
  };
 service : {
-  activatePool: (PoolId) -> (Result_12);
+  activatePool: (PoolId) -> (Result_14);
   autoCloseExpiredPools: () -> (nat);
-  cancelPool: (PoolId, opt text) -> (Result_12);
-  claimReward: (PoolId) -> (Result_13);
-  closePool: (PoolId) -> (Result_12);
-  createPool: (CreatePoolRequest) -> (Result_11);
+  cancelPool: (PoolId, opt text) -> (Result_14);
+  claimCancelledRaceSeed: (PoolId) -> (Result_2);
+  /// Prize payments use the creator's seed; entry stakes are returned independently.
+  claimRaceStake: (PoolId) -> (Result_2);
+  claimReward: (PoolId) -> (Result_2);
+  closePool: (PoolId) -> (Result_14);
+  createPool: (CreatePoolRequest) -> (Result_13);
   getActivePools: (nat, nat) -> (vec PoolSummary) query;
   getAllPools: (nat, nat) -> (vec PoolSummary) query;
   /// Get canister status including cycle balance (admin only)
-  getCanisterStatus: () -> (Result_10);
+  getCanisterStatus: () -> (Result_12);
   getClosedPools: (nat, nat) -> (vec PoolSummary) query;
-  getLeaderboard: (PoolId) -> (Result_9) query;
-  getLeaderboardPaginated: (PoolId, nat, nat) -> (Result_8) query;
-  getParticipants: (PoolId) -> (Result_7) query;
-  getParticipantsPaginated: (PoolId, nat, nat) -> (Result_6) query;
+  getLeaderboard: (PoolId) -> (Result_11) query;
+  getLeaderboardPaginated: (PoolId, nat, nat) -> (Result_10) query;
+  getMyCancelledRaceSeedInfo: (PoolId) -> (opt RaceSeedRefundInfo) query;
+  getMyPendingRaceCreations: () -> (vec record {
+                                          PoolId;
+                                          nat;
+                                        }) query;
+  getMyRaceStakeInfo: (PoolId) -> (opt RaceStakeInfo) query;
+  /// How many of each limit the caller is using right now.
+  getMyRaceUsage: () ->
+   (record {
+      created: nat;
+      joined: nat;
+      maxCreated: nat;
+      maxJoined: nat;
+    }) query;
+  getParticipants: (PoolId) -> (Result_9) query;
+  getParticipantsPaginated: (PoolId, nat, nat) -> (Result_8) query;
   getPool: (PoolId) -> (opt Pool) query;
-  getPoolDepositAccount: (PoolId) -> (Result_5) query;
+  getPoolDepositAccount: (PoolId) -> (Result_7) query;
   getPoolObjective: (PoolId) -> (opt PoolObjective) query;
   getPoolResult: (PoolId) -> (opt PoolResult) query;
-  getTeamLeaderboard: (PoolId) -> (Result_4) query;
-  getTeamProgress: (PoolId) -> (Result_3) query;
+  /// Check the ledger before resolving an interrupted creator funding transfer.
+  getRaceLimits: () -> (record {
+                          maxCreated: nat;
+                          maxJoined: nat;
+                        }) query;
+  getTeamLeaderboard: (PoolId) -> (Result_6) query;
+  getTeamProgress: (PoolId) -> (Result_5) query;
   getTotalNetworkFees: () -> (nat) query;
   hasClaimedReward: (PoolId, principal) -> (bool) query;
-  hasTeamCompletedObjective: (PoolId, Team) -> (Result_2) query;
+  hasTeamCompletedObjective: (PoolId, Team) -> (Result_4) query;
   isParticipant: (PoolId, principal) -> (bool) query;
-  joinPool: (JoinPoolRequest) -> (Result_1);
+  joinPool: (JoinPoolRequest) -> (Result_3);
   listPools: (bool) -> (vec PoolSummary) query;
   listPoolsPaginated: (ListPoolsRequest) -> (ListPoolsResponse) query;
+  reconcilePendingRaceCreation: (PoolId, bool) -> (Result_1);
+  /// An interrupted join may have reached the ledger. Inspect its transfer before resolving.
+  reconcilePendingRaceJoin: (PoolId, principal, bool) -> (Result_1);
+  /// A pending claim may mean the ledger paid before a canister restart. Verify the ledger
+  /// before choosing `paid`; resetting an actually paid claim would permit a second payout.
+  reconcileRaceClaim: (PoolId, principal, bool, bool) -> (Result_1);
+  /// Use only after checking whether an interrupted prize transfer reached the ledger.
+  reconcileRacePrizeClaim: (PoolId, principal, bool) -> (Result_1);
+  /// Races from before the seven-month policy have no refund path: an expired draft cannot be
+  /// activated and cancelling one returns nothing, so its funding would stay in the race account.
+  /// For such a race with no rider besides the creator, the super admin returns whatever the race
+  /// account holds (less the ledger fee) to the creator and marks the race cancelled. Uses the
+  /// seed-refund claim state, so `reconcileRaceClaim(poolId, owner, true, paid)` resolves a pending one.
+  refundLegacySoloRace: (PoolId) -> (Result_2);
+  setRaceLimits: (nat, nat) -> (Result_1);
   submitRide: (SubmitRideRequest) -> (Result);
 }

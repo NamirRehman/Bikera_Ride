@@ -156,6 +156,24 @@ export const idlFactory = ({ IDL }) => {
     'getSolanaClaimBalance' : IDL.Func([], [Tokens], []),
     'getTotalClaimedToSolana' : IDL.Func([], [Tokens], ['query']),
     'getTotalSupply' : IDL.Func([], [Tokens], ['query']),
+    'getAccountTransactions' : IDL.Func(
+        [Account, IDL.Nat],
+        [
+          IDL.Vec(
+            IDL.Record({
+              'to' : Account,
+              'fee' : Tokens,
+              'from' : Account,
+              'kind' : IDL.Text,
+              'memo' : IDL.Opt(Memo),
+              'timestamp' : Timestamp,
+              'index' : IDL.Nat,
+              'amount' : Tokens,
+            })
+          ),
+        ],
+        ['query'],
+      ),
     'getTransactionHistory' : IDL.Func(
         [IDL.Opt(IDL.Nat)],
         [

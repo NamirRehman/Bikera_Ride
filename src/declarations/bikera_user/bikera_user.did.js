@@ -1,7 +1,39 @@
 export const idlFactory = ({ IDL }) => {
-  const UserId = IDL.Principal;
   const Result = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
+  const AttestationSource = IDL.Variant({
+    'ShadowWorker' : IDL.Null,
+    'Strava' : IDL.Null,
+    'Garmin' : IDL.Null,
+    'Other' : IDL.Text,
+    'AppleHealth' : IDL.Null,
+    'GoogleFit' : IDL.Null,
+  });
+  const UserId = IDL.Principal;
   const Timestamp = IDL.Int;
+  const ExternalLink = IDL.Record({
+    'linkedAt' : Timestamp,
+    'lastAttestationAt' : IDL.Opt(Timestamp),
+    'source' : AttestationSource,
+    'attestationCount' : IDL.Nat,
+    'accountHash' : IDL.Text,
+  });
+  const ExternalLinkGrant = IDL.Record({
+    'link' : ExternalLink,
+    'rider' : UserId,
+  });
+  const Result_5 = IDL.Variant({ 'ok' : ExternalLinkGrant, 'err' : IDL.Text });
+  const AttestationSource__1 = IDL.Variant({
+    'ShadowWorker' : IDL.Null,
+    'Strava' : IDL.Null,
+    'Garmin' : IDL.Null,
+    'Other' : IDL.Text,
+    'AppleHealth' : IDL.Null,
+    'GoogleFit' : IDL.Null,
+  });
+  const RideProvenance = IDL.Record({
+    'attestations' : IDL.Vec(AttestationSource__1),
+    'deviceRecorded' : IDL.Bool,
+  });
   const Speed = IDL.Nat;
   const Distance = IDL.Nat;
   const LocationPoint = IDL.Record({
@@ -12,6 +44,7 @@ export const idlFactory = ({ IDL }) => {
   });
   const ActivitySession = IDL.Record({
     'id' : IDL.Text,
+    'provenance' : RideProvenance,
     'startTime' : Timestamp,
     'duration' : IDL.Nat,
     'avgSpeed' : Speed,
@@ -22,7 +55,7 @@ export const idlFactory = ({ IDL }) => {
     'isActive' : IDL.Bool,
     'route' : IDL.Vec(LocationPoint),
   });
-  const Result_2 = IDL.Variant({
+  const Result_4 = IDL.Variant({
     'ok' : IDL.Record({
       'canisterName' : IDL.Text,
       'version' : IDL.Text,
@@ -90,6 +123,24 @@ export const idlFactory = ({ IDL }) => {
     'solanaAddress' : IDL.Opt(IDL.Text),
     'avatar' : IDL.Opt(IDL.Text),
   });
+  const DistanceInRange = IDL.Record({
+    'attestedMeters' : Distance,
+    'confirmedSessions' : IDL.Nat,
+    'completedSessions' : IDL.Nat,
+    'rejectedSessions' : IDL.Nat,
+    'rejectedMeters' : Distance,
+    'toTs' : Timestamp,
+    'attestedSessions' : IDL.Nat,
+    'completedMeters' : Distance,
+    'activeMeters' : Distance,
+    'confirmedMeters' : Distance,
+    'activeSessions' : IDL.Nat,
+    'fromTs' : Timestamp,
+  });
+  const Result_3 = IDL.Variant({
+    'ok' : IDL.Vec(ExternalLink),
+    'err' : IDL.Text,
+  });
   const FriendRequest = IDL.Record({
     'id' : IDL.Text,
     'to' : UserId,
@@ -98,6 +149,28 @@ export const idlFactory = ({ IDL }) => {
     'createdAt' : Timestamp,
     'respondedAt' : IDL.Opt(Timestamp),
   });
+  const PublicCard = IDL.Record({
+    'country' : IDL.Opt(IDL.Text),
+    'username' : IDL.Text,
+    'userId' : UserId,
+    'totalXP' : IDL.Nat,
+    'totalDistance' : Distance,
+    'avatar' : IDL.Opt(IDL.Text),
+  });
+  const ReferralSummary = IDL.Record({
+    'totalReferrals' : IDL.Nat,
+    'referredUsers' : IDL.Vec(UserId),
+    'lastReferredAt' : IDL.Opt(Timestamp),
+  });
+  const RideMatchPolicy = IDL.Record({
+    'matchDistanceTolerancePercent' : IDL.Nat,
+    'matchWindowSeconds' : IDL.Nat,
+  });
+  const RideVerificationPolicy = IDL.Record({
+    'maxDailyDistanceM' : IDL.Nat,
+    'maxAvgSpeedKmh' : IDL.Nat,
+  });
+  const UserIdentity = IDL.Record({ 'id' : UserId, 'username' : IDL.Text });
   const UserStats = IDL.Record({
     'avgSpeed' : Speed,
     'maxSpeed' : Speed,
@@ -119,11 +192,27 @@ export const idlFactory = ({ IDL }) => {
     'friends' : IDL.Vec(UserId),
     'profile' : UserProfile,
   });
-  const ReferralSummary = IDL.Record({
-    'totalReferrals' : IDL.Nat,
-    'referredUsers' : IDL.Vec(UserId),
+  const Result_2 = IDL.Variant({ 'ok' : UserProfile, 'err' : IDL.Text });
+  const RideAttestation = IDL.Record({
+    'startTime' : Timestamp,
+    'endTime' : Timestamp,
+    'externalId' : IDL.Text,
+    'sourceAccountHash' : IDL.Opt(IDL.Text),
+    'distance' : Distance,
+    'evidenceHash' : IDL.Text,
   });
-  const Result_1 = IDL.Variant({ 'ok' : UserProfile, 'err' : IDL.Text });
+  const AttestationOutcome = IDL.Variant({
+    'AlreadyRecorded' : IDL.Null,
+    'Matched' : IDL.Null,
+    'Inserted' : IDL.Null,
+  });
+  const AttestationReceipt = IDL.Record({
+    'provenance' : RideProvenance,
+    'distance' : Distance,
+    'sessionId' : IDL.Text,
+    'outcome' : AttestationOutcome,
+  });
+  const Result_1 = IDL.Variant({ 'ok' : AttestationReceipt, 'err' : IDL.Text });
   const RideSummary = IDL.Record({
     'duration' : IDL.Nat,
     'avgSpeed' : Speed,
@@ -146,8 +235,18 @@ export const idlFactory = ({ IDL }) => {
     }),
   });
   return IDL.Service({
+    'addAdminPrincipal' : IDL.Func([IDL.Principal], [Result], []),
+    'addTrustedRideReader' : IDL.Func([IDL.Principal], [Result], []),
+    'addTrustedRideWriter' : IDL.Func([IDL.Principal], [Result], []),
+    'beginExternalLink' : IDL.Func([AttestationSource], [Result], []),
     'clearUserData' : IDL.Func([UserId], [Result], []),
+    'completeExternalLink' : IDL.Func(
+        [IDL.Text, AttestationSource, IDL.Text],
+        [Result_5],
+        [],
+      ),
     'deactivateUser' : IDL.Func([UserId], [Result], []),
+    'deleteUserByPrincipal' : IDL.Func([UserId], [Result], []),
     'endActivitySession' : IDL.Func([IDL.Text, UserId], [Result], []),
     'eraseUserDataGDPR' : IDL.Func([UserId], [Result], []),
     'getActiveUsers' : IDL.Func([Timestamp], [IDL.Vec(UserId)], ['query']),
@@ -162,17 +261,18 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(ActivitySession)],
         ['query'],
       ),
-    'getCanisterStatus' : IDL.Func([], [Result_2], []),
+    'getCanisterStatus' : IDL.Func([], [Result_4], []),
     'getCurrentUserProfile' : IDL.Func(
         [UserId],
         [IDL.Opt(UserProfile)],
         ['query'],
       ),
-    'getReferralSummary' : IDL.Func(
-        [UserId],
-        [ReferralSummary],
+    'getDistanceInRange' : IDL.Func(
+        [UserId, Timestamp, Timestamp],
+        [DistanceInRange],
         ['query'],
       ),
+    'getExternalLinks' : IDL.Func([UserId], [Result_3], ['query']),
     'getFriendRequests' : IDL.Func(
         [UserId, IDL.Opt(IDL.Nat)],
         [IDL.Vec(FriendRequest)],
@@ -184,8 +284,27 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(IDL.Tuple(UserId, Distance))],
         ['query'],
       ),
+    'getPublicCards' : IDL.Func(
+        [IDL.Vec(UserId)],
+        [IDL.Vec(PublicCard)],
+        ['query'],
+      ),
+    'getReferralSummary' : IDL.Func([UserId], [ReferralSummary], ['query']),
+    'getRideMatchPolicy' : IDL.Func([], [RideMatchPolicy], ['query']),
+    'getRideVerificationPolicy' : IDL.Func(
+        [],
+        [RideVerificationPolicy],
+        ['query'],
+      ),
     'getSolanaAddress' : IDL.Func([UserId], [IDL.Opt(IDL.Text)], ['query']),
     'getTotalUsersCount' : IDL.Func([], [IDL.Nat], ['query']),
+    'getTrustedRideReaders' : IDL.Func([], [IDL.Vec(IDL.Principal)], ['query']),
+    'getTrustedRideWriters' : IDL.Func([], [IDL.Vec(IDL.Principal)], ['query']),
+    'getUserByUsername' : IDL.Func(
+        [IDL.Text],
+        [IDL.Opt(UserIdentity)],
+        ['query'],
+      ),
     'getUserDashboardSnapshot' : IDL.Func(
         [UserId],
         [IDL.Opt(UserDashboardSnapshot)],
@@ -193,6 +312,11 @@ export const idlFactory = ({ IDL }) => {
       ),
     'getUserProfile' : IDL.Func([UserId], [IDL.Opt(UserProfile)], ['query']),
     'getUserStats' : IDL.Func([UserId], [UserStats], ['query']),
+    'getVerifiedDistanceInRange' : IDL.Func(
+        [UserId, Timestamp, Timestamp],
+        [Distance],
+        ['query'],
+      ),
     'recordUserActivity' : IDL.Func([UserId], [], []),
     'registerUser' : IDL.Func(
         [
@@ -202,16 +326,41 @@ export const idlFactory = ({ IDL }) => {
           IDL.Opt(IDL.Text),
           UserId,
         ],
-        [Result_1],
+        [Result_2],
         [],
       ),
+    'removeAdminPrincipal' : IDL.Func([IDL.Principal], [Result], []),
+    'removeTrustedRideReader' : IDL.Func([IDL.Principal], [Result], []),
+    'removeTrustedRideWriter' : IDL.Func([IDL.Principal], [Result], []),
     'respondToFriendRequest' : IDL.Func(
         [IDL.Text, IDL.Bool, UserId],
         [Result],
         [],
       ),
+    'revokeAttestedRide' : IDL.Func(
+        [UserId, AttestationSource, IDL.Text],
+        [Result],
+        [],
+      ),
     'sendFriendRequest' : IDL.Func([UserId, UserId], [Result], []),
+    'setRideMatchPolicy' : IDL.Func([RideMatchPolicy], [Result], []),
+    'setRideVerificationPolicy' : IDL.Func(
+        [RideVerificationPolicy],
+        [Result],
+        [],
+      ),
     'startActivitySession' : IDL.Func([UserId], [Result], []),
+    'submitAttestedRide' : IDL.Func(
+        [UserId, AttestationSource, RideAttestation],
+        [Result_1],
+        [],
+      ),
+    'submitCompletedRide' : IDL.Func([RideSummary], [Result], []),
+    'unlinkExternalAccount' : IDL.Func(
+        [UserId, AttestationSource],
+        [Result],
+        [],
+      ),
     'updateActivitySession' : IDL.Func(
         [IDL.Text, Distance, Speed, Speed, IDL.Opt(LocationPoint), UserId],
         [Result],

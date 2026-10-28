@@ -17,6 +17,7 @@ import { LoadingBlock } from '../components/LoadingBlock';
 import { GuestBanner } from '../components/GuestBanner';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { AnimatedListItem, listItemEntering, PressableScale } from '../components/motion';
+import { formatXp } from '../utils/format';
 
 interface RideHistory {
   id: string;
@@ -319,7 +320,7 @@ export function HistoryScreen() {
           >
             <Text style={styles.summaryLabel}>Total XP</Text>
             <Text style={styles.summaryValue}>
-              {totalStats.xp.toLocaleString()} <Text style={styles.summaryUnit}>XP</Text>
+              {formatXp(totalStats.xp)} <Text style={styles.summaryUnit}>XP</Text>
             </Text>
           </LinearGradient>
         </Card>

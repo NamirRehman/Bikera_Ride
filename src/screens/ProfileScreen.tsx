@@ -19,6 +19,7 @@ import { WalletScreen } from './WalletScreen';
 import { WEB_APP_URL } from '../config';
 import { GuestBanner } from '../components/GuestBanner';
 import { applyCountryTag, parseCountryFromBio, stripCountryTag, getStoredCountry, saveUserCountry, clearUserCountry, COUNTRY_OPTIONS, countryName, countryFlag } from '../services/userCountry';
+import { formatXp } from '../utils/format';
 
 function SettingRow({ icon, label, value, onPress, isDestructive = false, rightComponent }: any) {
   return (
@@ -640,7 +641,7 @@ export function ProfileScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 0, gap: 12 }}>
               <LinearGradient colors={[colors.brandPurple, colors.brandViolet]} style={styles.statCard}>
                 <Text style={styles.statLabel}>Total XP</Text>
-                <Text style={styles.statValue}>{totalXP.toLocaleString()}</Text>
+                <Text style={styles.statValue}>{formatXp(totalXP)}</Text>
               </LinearGradient>
               <LinearGradient colors={[colors.brandBlue300, colors.brandBlue100]} style={styles.statCard}>
                 <Text style={styles.statLabel}>iMERA</Text>

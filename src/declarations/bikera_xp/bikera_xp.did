@@ -25,6 +25,12 @@ type XPReason =
    Penalty: text;
    Referral: UserId;
  };
+type XPMatchRow = 
+ record {
+   amount: XPAmount;
+   distance: opt Distance;
+   timestamp: Timestamp;
+ };
 type XPAmount = nat;
 type UserXPProfile = 
  record {
@@ -78,6 +84,13 @@ type Result =
    err: text;
    ok: nat;
  };
+type PublicXPCard = 
+ record {
+   currentLevel: nat;
+   totalDistance: Distance;
+   totalXP: XPAmount;
+   userId: UserId;
+ };
 type LevelConfig = 
  record {
    benefits: vec text;
@@ -97,19 +110,36 @@ type Achievement =
  };
 service : {
   addAchievementXP: (UserId, text) -> (Result_3);
+  addAdminPrincipal: (principal) -> (Result_1);
   addDistanceXP: (UserId, Distance) -> (Result_3);
   /// Add distance XP in batch (more efficient)
   /// Reduces canister writes by 10-50X
+  /// CRITICAL: Includes eligibility validation to prevent XP when not riding
   addDistanceXPBatch: (UserId, Distance) -> (Result_3);
   addMiningBonus: (UserId, XPAmount) -> (Result_3);
+  /// Award one mining round in a single cross-canister message. The main
+  /// canister previously sent one message and waited for one callback per
+  /// winner, multiplying its cycle and callback overhead by up to 10.
+  addMiningBonuses: (nat, vec UserId, XPAmount) -> (Result_1);
   addReferralBonus: (UserId, UserId) -> (Result_3);
-  /// Add XP to user with reason and metadata
   addXP: (UserId, XPAmount, XPReason, opt Distance, opt text) -> (Result_3);
   applyPenalty: (UserId, XPAmount, text) -> (Result_3);
   /// Clear old transactions (admin only)
   clearOldTransactions: () -> (Result_1);
   getAchievementDefinitions: () -> (vec Achievement) query;
   getAchievements: (UserId) -> (vec text) query;
+  /// EFFICIENT: Batch user profiles for leaderboard (single call)
+  /// Reduces N calls to 1 call for N users
+  getBatchUserProfiles: (vec UserId) ->
+   (vec
+     record {
+       UserId;
+       record {
+         isActive: bool;
+         level: nat;
+         totalXP: XPAmount;
+       };
+     }) query;
   /// Get canister status including cycle balance (admin only)
   getCanisterStatus: () -> (Result_2);
   getDailyXPClaimed: (UserId, Day) -> (XPAmount) query;
@@ -126,10 +156,22 @@ service : {
   getLevel: (UserId) -> (nat) query;
   getLevelConfigs: () -> (vec LevelConfig) query;
   getPublicUserXPProfile: (UserId) -> (UserXPProfile) query;
+  getPublicXPCards: (vec UserId) -> (vec PublicXPCard) query;
   getReferralCount: (UserId) -> (nat) query;
   getStreakDays: (UserId) -> (nat) query;
   getTotalDistance: (UserId) -> (Distance) query;
   getTotalXP: (UserId) -> (XPAmount) query;
+  /// EFFICIENT: Get user profile with minimal data (for frequent calls)
+  /// Returns only essential fields to reduce data transfer
+  getUserProfileLite: (UserId) ->
+   (record {
+      currentStreak: nat;
+      isActive: bool;
+      lastActivity: Timestamp;
+      level: nat;
+      totalXP: XPAmount;
+    }) query;
+  getXPMatchRows: (UserId, opt nat) -> (vec XPMatchRow) query;
   /// Get complete XP data in single query
   /// Replaces: getTotalXP(), getLevel(), getXPTransactions(), getXPToNextLevel()
   /// Result: 1 call instead of 4+ calls (4X reduction)
@@ -138,6 +180,7 @@ service : {
   getXPTransactions: (UserId, opt nat) -> (vec XPTransaction) query;
   /// Check if automated XP minting is active
   isAutomatedXPMintingActive: () -> (bool) query;
+  removeAdminPrincipal: (principal) -> (Result_1);
   /// Reset user XP data (admin only)
   resetUserXP: (UserId) -> (Result_1);
   /// Start automated 2-day batch XP minting

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text, View, StyleSheet, Dimensions } from 'react-native';
+import { Text, View, StyleSheet, Dimensions, Linking } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,6 +10,7 @@ import { ConnectIIButton } from '../components/ConnectIIButton';
 import { PressableScale, FadeInView } from '../components/motion';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, radii, shadows } from '../theme/tokens';
+import { webAppPage } from '../config';
 
 const { width } = Dimensions.get('window');
 const H_PAD = 16;
@@ -22,6 +23,8 @@ type MenuItem = {
   icon: string;
   to: string;
   color: string;
+  /** Web app page to open instead of a screen (features not built natively yet). */
+  webPath?: string;
 };
 
 const SECTIONS: { label: string; items: MenuItem[] }[] = [
@@ -30,6 +33,19 @@ const SECTIONS: { label: string; items: MenuItem[] }[] = [
     items: [
       { title: 'History', icon: 'time', to: 'History', color: colors.brandBlue300, subtitle: 'Past rides and XP' },
       { title: 'Wallet', icon: 'wallet', to: 'Wallet', color: colors.brandPurple, subtitle: 'Balances and rewards' },
+    ],
+  },
+  {
+    label: 'Ride Tools',
+    items: [
+      { title: 'Scan a Bike', icon: 'qr-code', to: 'ScanBike', color: colors.success, subtitle: 'Partner bike QR code' },
+      { title: 'Ride Files', icon: 'document-text', to: 'RideFiles', color: colors.brandViolet, subtitle: 'Import or export GPX / FIT' },
+    ],
+  },
+  {
+    label: 'On The Web',
+    items: [
+      { title: 'Partner Bikes', icon: 'map', to: 'WebApp', webPath: 'ride-partners', color: colors.brandBlue300, subtitle: 'Shared bikes near you' },
     ],
   },
   {
@@ -158,6 +174,10 @@ export function MoreHomeScreen() {
                   key={item.title}
                   item={item}
                   onPress={() => {
+                    if (item.webPath) {
+                      Linking.openURL(webAppPage(item.webPath)).catch(() => {});
+                      return;
+                    }
                     navigation.navigate(item.to);
                   }}
                 />

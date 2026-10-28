@@ -32,6 +32,7 @@ import {
   getStoredCountry,
   saveUserCountry,
 } from '../services/userCountry';
+import { formatXp } from '../utils/format';
 
 interface LeaderboardEntry {
   rank: number;
@@ -374,7 +375,7 @@ export function LeaderboardScreen() {
 
     buttons.push({ text: 'Cancel', style: 'cancel' });
 
-    Alert.alert(item.username, `${item.xp.toLocaleString()} XP · Level ${item.level}`, buttons);
+    Alert.alert(item.username, `${formatXp(item.xp)} XP · Level ${item.level}`, buttons);
   };
 
   const getRankColor = (rank: number): string[] => {
@@ -452,7 +453,7 @@ export function LeaderboardScreen() {
       </View>
 
       <View style={styles.statsContainer}>
-        <Text style={styles.mainStat}>{item.xp.toLocaleString()} XP</Text>
+        <Text style={styles.mainStat}>{formatXp(item.xp)} XP</Text>
         {!item.isFriend && !item.isCurrentUser ? (
           <Text style={styles.subStat}>Tap to add</Text>
         ) : (

@@ -163,6 +163,18 @@ type BikeraIMERA =
    getSolanaClaimBalance: () -> (Tokens);
    getTotalClaimedToSolana: () -> (Tokens) query;
    getTotalSupply: () -> (Tokens) query;
+   getAccountTransactions: (Account, nat) ->
+    (vec
+      record {
+        amount: Tokens;
+        fee: Tokens;
+        from: Account;
+        index: nat;
+        kind: text;
+        memo: opt Memo;
+        timestamp: Timestamp;
+        to: Account;
+      }) query;
    getTransactionHistory: (opt nat) ->
     (vec
       record {

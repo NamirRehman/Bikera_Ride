@@ -14,6 +14,7 @@ import { colors } from '../theme/tokens';
 import { useCachedData } from '../hooks/useCachedData';
 import { getBikeraImeraActor, getBikeraRewardsActor, getHost } from '../utils/actors';
 import { WEB_APP_URL } from '../config';
+import { formatImera } from '../utils/format';
 import { GuestBanner } from '../components/GuestBanner';
 
 const TOKEN_DECIMALS = 8;
@@ -26,14 +27,7 @@ interface Transaction {
 }
 
 function BalanceCard({ balance, loading }: { balance: number; loading: boolean }) {
-  const formattedBalance = useMemo(
-    () =>
-      balance.toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 8,
-      }),
-    [balance]
-  );
+  const formattedBalance = useMemo(() => formatImera(balance), [balance]);
 
   return (
     <Card style={styles.balanceCard}>
@@ -76,7 +70,7 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
         <Text style={styles.transactionDate}>{formattedDate}</Text>
       </View>
       <Text style={styles.transactionAmountText}>
-        +{transaction.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })} iMERA
+        +{formatImera(transaction.amount)} iMERA
       </Text>
     </View>
   );

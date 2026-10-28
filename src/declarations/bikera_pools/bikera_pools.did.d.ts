@@ -113,11 +113,13 @@ export interface PoolSummary {
   'status' : PoolStatus,
   'title' : string,
   'rewardModel' : RewardModel,
+  'stakeLockPolicy' : boolean,
   'endTime' : Timestamp,
   'owner' : Principal,
   'createdAt' : Timestamp,
   'description' : string,
   'networkFee' : bigint,
+  'seedAmount' : bigint,
   'participantCount' : bigint,
   'maxParticipants' : bigint,
   'entryFee' : bigint,
@@ -134,11 +136,33 @@ export type PoolType = { 'SpeedEfficiency' : null } |
   { 'EcoMode' : null };
 export type PoolVisibility = { 'Private' : null } |
   { 'Public' : null };
+export interface RaceSeedRefundInfo {
+  'pending' : boolean,
+  'claimed' : boolean,
+  'amount' : bigint,
+}
+export interface RaceStakeInfo {
+  'pending' : boolean,
+  'unlockAt' : Timestamp,
+  'claimed' : boolean,
+  'isWinner' : boolean,
+  'amount' : bigint,
+}
 export type Result = { 'ok' : RideSubmission } |
   { 'err' : string };
-export type Result_1 = { 'ok' : JoinPoolResponse } |
+export type Result_1 = { 'ok' : string } |
   { 'err' : string };
 export type Result_10 = {
+    'ok' : {
+      'total' : bigint,
+      'hasMore' : boolean,
+      'leaderboard' : Array<ParticipantScore>,
+    }
+  } |
+  { 'err' : string };
+export type Result_11 = { 'ok' : Array<ParticipantScore> } |
+  { 'err' : string };
+export type Result_12 = {
     'ok' : {
       'activePools' : bigint,
       'canisterName' : string,
@@ -151,23 +175,25 @@ export type Result_10 = {
     }
   } |
   { 'err' : string };
-export type Result_11 = { 'ok' : CreatePoolResponse } |
+export type Result_13 = { 'ok' : CreatePoolResponse } |
   { 'err' : string };
-export type Result_12 = { 'ok' : Pool } |
+export type Result_14 = { 'ok' : Pool } |
   { 'err' : string };
-export type Result_13 = { 'ok' : bigint } |
+export type Result_2 = { 'ok' : bigint } |
   { 'err' : string };
-export type Result_2 = { 'ok' : boolean } |
+export type Result_3 = { 'ok' : JoinPoolResponse } |
   { 'err' : string };
-export type Result_3 = {
+export type Result_4 = { 'ok' : boolean } |
+  { 'err' : string };
+export type Result_5 = {
     'ok' : { 'teamA' : TeamProgress, 'teamB' : TeamProgress }
   } |
   { 'err' : string };
-export type Result_4 = { 'ok' : { 'teamA' : TeamScore, 'teamB' : TeamScore } } |
+export type Result_6 = { 'ok' : { 'teamA' : TeamScore, 'teamB' : TeamScore } } |
   { 'err' : string };
-export type Result_5 = { 'ok' : DepositAccount } |
+export type Result_7 = { 'ok' : DepositAccount } |
   { 'err' : string };
-export type Result_6 = {
+export type Result_8 = {
     'ok' : {
       'participants' : Array<Participant>,
       'total' : bigint,
@@ -175,17 +201,7 @@ export type Result_6 = {
     }
   } |
   { 'err' : string };
-export type Result_7 = { 'ok' : Array<Participant> } |
-  { 'err' : string };
-export type Result_8 = {
-    'ok' : {
-      'total' : bigint,
-      'hasMore' : boolean,
-      'leaderboard' : Array<ParticipantScore>,
-    }
-  } |
-  { 'err' : string };
-export type Result_9 = { 'ok' : Array<ParticipantScore> } |
+export type Result_9 = { 'ok' : Array<Participant> } |
   { 'err' : string };
 export type RewardModel = { 'Proportional' : null } |
   { 'TopThree' : null } |
@@ -222,33 +238,69 @@ export interface TeamScore {
 }
 export type Timestamp = bigint;
 export interface _SERVICE {
-  'activatePool' : ActorMethod<[PoolId], Result_12>,
+  'activatePool' : ActorMethod<[PoolId], Result_14>,
   'autoCloseExpiredPools' : ActorMethod<[], bigint>,
-  'cancelPool' : ActorMethod<[PoolId, [] | [string]], Result_12>,
-  'claimReward' : ActorMethod<[PoolId], Result_13>,
-  'closePool' : ActorMethod<[PoolId], Result_12>,
-  'createPool' : ActorMethod<[CreatePoolRequest], Result_11>,
+  'cancelPool' : ActorMethod<[PoolId, [] | [string]], Result_14>,
+  'claimCancelledRaceSeed' : ActorMethod<[PoolId], Result_2>,
+  'claimRaceStake' : ActorMethod<[PoolId], Result_2>,
+  'claimReward' : ActorMethod<[PoolId], Result_2>,
+  'closePool' : ActorMethod<[PoolId], Result_14>,
+  'createPool' : ActorMethod<[CreatePoolRequest], Result_13>,
   'getActivePools' : ActorMethod<[bigint, bigint], Array<PoolSummary>>,
   'getAllPools' : ActorMethod<[bigint, bigint], Array<PoolSummary>>,
-  'getCanisterStatus' : ActorMethod<[], Result_10>,
+  'getCanisterStatus' : ActorMethod<[], Result_12>,
   'getClosedPools' : ActorMethod<[bigint, bigint], Array<PoolSummary>>,
-  'getLeaderboard' : ActorMethod<[PoolId], Result_9>,
-  'getLeaderboardPaginated' : ActorMethod<[PoolId, bigint, bigint], Result_8>,
-  'getParticipants' : ActorMethod<[PoolId], Result_7>,
-  'getParticipantsPaginated' : ActorMethod<[PoolId, bigint, bigint], Result_6>,
+  'getLeaderboard' : ActorMethod<[PoolId], Result_11>,
+  'getLeaderboardPaginated' : ActorMethod<[PoolId, bigint, bigint], Result_10>,
+  'getMyCancelledRaceSeedInfo' : ActorMethod<
+    [PoolId],
+    [] | [RaceSeedRefundInfo]
+  >,
+  'getMyPendingRaceCreations' : ActorMethod<[], Array<[PoolId, bigint]>>,
+  'getMyRaceStakeInfo' : ActorMethod<[PoolId], [] | [RaceStakeInfo]>,
+  'getMyRaceUsage' : ActorMethod<
+    [],
+    {
+      'created' : bigint,
+      'maxCreated' : bigint,
+      'joined' : bigint,
+      'maxJoined' : bigint,
+    }
+  >,
+  'getParticipants' : ActorMethod<[PoolId], Result_9>,
+  'getParticipantsPaginated' : ActorMethod<[PoolId, bigint, bigint], Result_8>,
   'getPool' : ActorMethod<[PoolId], [] | [Pool]>,
-  'getPoolDepositAccount' : ActorMethod<[PoolId], Result_5>,
+  'getPoolDepositAccount' : ActorMethod<[PoolId], Result_7>,
   'getPoolObjective' : ActorMethod<[PoolId], [] | [PoolObjective]>,
   'getPoolResult' : ActorMethod<[PoolId], [] | [PoolResult]>,
-  'getTeamLeaderboard' : ActorMethod<[PoolId], Result_4>,
-  'getTeamProgress' : ActorMethod<[PoolId], Result_3>,
+  'getRaceLimits' : ActorMethod<
+    [],
+    { 'maxCreated' : bigint, 'maxJoined' : bigint }
+  >,
+  'getTeamLeaderboard' : ActorMethod<[PoolId], Result_6>,
+  'getTeamProgress' : ActorMethod<[PoolId], Result_5>,
   'getTotalNetworkFees' : ActorMethod<[], bigint>,
   'hasClaimedReward' : ActorMethod<[PoolId, Principal], boolean>,
-  'hasTeamCompletedObjective' : ActorMethod<[PoolId, Team], Result_2>,
+  'hasTeamCompletedObjective' : ActorMethod<[PoolId, Team], Result_4>,
   'isParticipant' : ActorMethod<[PoolId, Principal], boolean>,
-  'joinPool' : ActorMethod<[JoinPoolRequest], Result_1>,
+  'joinPool' : ActorMethod<[JoinPoolRequest], Result_3>,
   'listPools' : ActorMethod<[boolean], Array<PoolSummary>>,
   'listPoolsPaginated' : ActorMethod<[ListPoolsRequest], ListPoolsResponse>,
+  'reconcilePendingRaceCreation' : ActorMethod<[PoolId, boolean], Result_1>,
+  'reconcilePendingRaceJoin' : ActorMethod<
+    [PoolId, Principal, boolean],
+    Result_1
+  >,
+  'reconcileRaceClaim' : ActorMethod<
+    [PoolId, Principal, boolean, boolean],
+    Result_1
+  >,
+  'reconcileRacePrizeClaim' : ActorMethod<
+    [PoolId, Principal, boolean],
+    Result_1
+  >,
+  'refundLegacySoloRace' : ActorMethod<[PoolId], Result_2>,
+  'setRaceLimits' : ActorMethod<[bigint, bigint], Result_1>,
   'submitRide' : ActorMethod<[SubmitRideRequest], Result>,
 }
 export declare const idlFactory: IDL.InterfaceFactory;

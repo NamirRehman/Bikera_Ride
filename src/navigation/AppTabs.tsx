@@ -16,6 +16,8 @@ const getHistoryScreen = () => require('../screens/HistoryScreen').HistoryScreen
 const getMoreHomeScreen = () => require('../screens/MoreHomeScreen').MoreHomeScreen;
 const getWalletScreen = () => require('../screens/WalletScreen').WalletScreen;
 const getProfileScreen = () => require('../screens/ProfileScreen').ProfileScreen;
+const getRideFilesScreen = () => require('../screens/RideFilesScreen').RideFilesScreen;
+const getScanBikeScreen = () => require('../screens/ScanBikeScreen').ScanBikeScreen;
 
 const Tab = createBottomTabNavigator<AppTabsParamList>();
 const MoreStack = createNativeStackNavigator<MoreStackParamList>();
@@ -41,6 +43,8 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="History" getComponent={getHistoryScreen} />
       <MoreStack.Screen name="Wallet" getComponent={getWalletScreen} />
       <MoreStack.Screen name="Profile" getComponent={getProfileScreen} />
+      <MoreStack.Screen name="RideFiles" getComponent={getRideFilesScreen} />
+      <MoreStack.Screen name="ScanBike" getComponent={getScanBikeScreen} />
     </MoreStack.Navigator>
   );
 }
@@ -95,7 +99,7 @@ export function AppTabs() {
       <Tab.Screen
         name="Track"
         getComponent={getTrackScreen}
-        options={{ freezeOnBlur: false, tabBarAccessibilityLabel: 'Track ride' }}
+        options={{ freezeOnBlur: false, tabBarAccessibilityLabel: 'Ride' }}
       />
       <Tab.Screen
         name="Friends"

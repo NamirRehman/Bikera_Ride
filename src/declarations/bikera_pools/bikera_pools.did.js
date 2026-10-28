@@ -59,8 +59,8 @@ export const idlFactory = ({ IDL }) => {
     'poolType' : PoolType,
     'potAmount' : IDL.Nat,
   });
-  const Result_12 = IDL.Variant({ 'ok' : Pool, 'err' : IDL.Text });
-  const Result_13 = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
+  const Result_14 = IDL.Variant({ 'ok' : Pool, 'err' : IDL.Text });
+  const Result_2 = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   const CreatePoolRequest = IDL.Record({
     'startTime' : Timestamp,
     'title' : IDL.Text,
@@ -77,7 +77,7 @@ export const idlFactory = ({ IDL }) => {
     'poolType' : PoolType,
   });
   const CreatePoolResponse = IDL.Record({ 'pool' : Pool });
-  const Result_11 = IDL.Variant({
+  const Result_13 = IDL.Variant({
     'ok' : CreatePoolResponse,
     'err' : IDL.Text,
   });
@@ -87,11 +87,13 @@ export const idlFactory = ({ IDL }) => {
     'status' : PoolStatus,
     'title' : IDL.Text,
     'rewardModel' : RewardModel,
+    'stakeLockPolicy' : IDL.Bool,
     'endTime' : Timestamp,
     'owner' : IDL.Principal,
     'createdAt' : Timestamp,
     'description' : IDL.Text,
     'networkFee' : IDL.Nat,
+    'seedAmount' : IDL.Nat,
     'participantCount' : IDL.Nat,
     'maxParticipants' : IDL.Nat,
     'entryFee' : IDL.Nat,
@@ -99,7 +101,7 @@ export const idlFactory = ({ IDL }) => {
     'poolType' : PoolType,
     'potAmount' : IDL.Nat,
   });
-  const Result_10 = IDL.Variant({
+  const Result_12 = IDL.Variant({
     'ok' : IDL.Record({
       'activePools' : IDL.Nat,
       'canisterName' : IDL.Text,
@@ -131,17 +133,29 @@ export const idlFactory = ({ IDL }) => {
     'bestAvgSpeed' : IDL.Nat,
     'bestMaxSpeed' : IDL.Nat,
   });
-  const Result_9 = IDL.Variant({
+  const Result_11 = IDL.Variant({
     'ok' : IDL.Vec(ParticipantScore),
     'err' : IDL.Text,
   });
-  const Result_8 = IDL.Variant({
+  const Result_10 = IDL.Variant({
     'ok' : IDL.Record({
       'total' : IDL.Nat,
       'hasMore' : IDL.Bool,
       'leaderboard' : IDL.Vec(ParticipantScore),
     }),
     'err' : IDL.Text,
+  });
+  const RaceSeedRefundInfo = IDL.Record({
+    'pending' : IDL.Bool,
+    'claimed' : IDL.Bool,
+    'amount' : IDL.Nat,
+  });
+  const RaceStakeInfo = IDL.Record({
+    'pending' : IDL.Bool,
+    'unlockAt' : Timestamp,
+    'claimed' : IDL.Bool,
+    'isWinner' : IDL.Bool,
+    'amount' : IDL.Nat,
   });
   const Participant = IDL.Record({
     'userId' : IDL.Principal,
@@ -150,11 +164,11 @@ export const idlFactory = ({ IDL }) => {
     'hasPaidEntry' : IDL.Bool,
     'rideSubmissions' : IDL.Vec(RideSubmission),
   });
-  const Result_7 = IDL.Variant({
+  const Result_9 = IDL.Variant({
     'ok' : IDL.Vec(Participant),
     'err' : IDL.Text,
   });
-  const Result_6 = IDL.Variant({
+  const Result_8 = IDL.Variant({
     'ok' : IDL.Record({
       'participants' : IDL.Vec(Participant),
       'total' : IDL.Nat,
@@ -166,7 +180,7 @@ export const idlFactory = ({ IDL }) => {
     'owner' : IDL.Principal,
     'subaccount' : IDL.Vec(IDL.Nat8),
   });
-  const Result_5 = IDL.Variant({ 'ok' : DepositAccount, 'err' : IDL.Text });
+  const Result_7 = IDL.Variant({ 'ok' : DepositAccount, 'err' : IDL.Text });
   const PoolResult = IDL.Record({
     'leaderboard' : IDL.Vec(ParticipantScore),
     'totalPot' : IDL.Nat,
@@ -180,7 +194,7 @@ export const idlFactory = ({ IDL }) => {
     'totalDistance' : IDL.Nat,
     'participantCount' : IDL.Nat,
   });
-  const Result_4 = IDL.Variant({
+  const Result_6 = IDL.Variant({
     'ok' : IDL.Record({ 'teamA' : TeamScore, 'teamB' : TeamScore }),
     'err' : IDL.Text,
   });
@@ -192,11 +206,11 @@ export const idlFactory = ({ IDL }) => {
     'currentValue' : IDL.Nat,
     'targetValue' : IDL.Nat,
   });
-  const Result_3 = IDL.Variant({
+  const Result_5 = IDL.Variant({
     'ok' : IDL.Record({ 'teamA' : TeamProgress, 'teamB' : TeamProgress }),
     'err' : IDL.Text,
   });
-  const Result_2 = IDL.Variant({ 'ok' : IDL.Bool, 'err' : IDL.Text });
+  const Result_4 = IDL.Variant({ 'ok' : IDL.Bool, 'err' : IDL.Text });
   const JoinPoolRequest = IDL.Record({
     'team' : IDL.Opt(Team),
     'inviteCode' : IDL.Opt(IDL.Text),
@@ -206,7 +220,7 @@ export const idlFactory = ({ IDL }) => {
     'pool' : Pool,
     'participant' : Participant,
   });
-  const Result_1 = IDL.Variant({ 'ok' : JoinPoolResponse, 'err' : IDL.Text });
+  const Result_3 = IDL.Variant({ 'ok' : JoinPoolResponse, 'err' : IDL.Text });
   const ListPoolsRequest = IDL.Record({
     'status' : IDL.Opt(PoolStatus),
     'sortBy' : IDL.Opt(
@@ -229,18 +243,21 @@ export const idlFactory = ({ IDL }) => {
     'hasMore' : IDL.Bool,
     'pools' : IDL.Vec(PoolSummary),
   });
+  const Result_1 = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SubmitRideRequest = IDL.Record({
     'sessionId' : RideSessionId,
     'poolId' : PoolId,
   });
   const Result = IDL.Variant({ 'ok' : RideSubmission, 'err' : IDL.Text });
   return IDL.Service({
-    'activatePool' : IDL.Func([PoolId], [Result_12], []),
+    'activatePool' : IDL.Func([PoolId], [Result_14], []),
     'autoCloseExpiredPools' : IDL.Func([], [IDL.Nat], []),
-    'cancelPool' : IDL.Func([PoolId, IDL.Opt(IDL.Text)], [Result_12], []),
-    'claimReward' : IDL.Func([PoolId], [Result_13], []),
-    'closePool' : IDL.Func([PoolId], [Result_12], []),
-    'createPool' : IDL.Func([CreatePoolRequest], [Result_11], []),
+    'cancelPool' : IDL.Func([PoolId, IDL.Opt(IDL.Text)], [Result_14], []),
+    'claimCancelledRaceSeed' : IDL.Func([PoolId], [Result_2], []),
+    'claimRaceStake' : IDL.Func([PoolId], [Result_2], []),
+    'claimReward' : IDL.Func([PoolId], [Result_2], []),
+    'closePool' : IDL.Func([PoolId], [Result_14], []),
+    'createPool' : IDL.Func([CreatePoolRequest], [Result_13], []),
     'getActivePools' : IDL.Func(
         [IDL.Nat, IDL.Nat],
         [IDL.Vec(PoolSummary)],
@@ -251,34 +268,66 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(PoolSummary)],
         ['query'],
       ),
-    'getCanisterStatus' : IDL.Func([], [Result_10], []),
+    'getCanisterStatus' : IDL.Func([], [Result_12], []),
     'getClosedPools' : IDL.Func(
         [IDL.Nat, IDL.Nat],
         [IDL.Vec(PoolSummary)],
         ['query'],
       ),
-    'getLeaderboard' : IDL.Func([PoolId], [Result_9], ['query']),
+    'getLeaderboard' : IDL.Func([PoolId], [Result_11], ['query']),
     'getLeaderboardPaginated' : IDL.Func(
+        [PoolId, IDL.Nat, IDL.Nat],
+        [Result_10],
+        ['query'],
+      ),
+    'getMyCancelledRaceSeedInfo' : IDL.Func(
+        [PoolId],
+        [IDL.Opt(RaceSeedRefundInfo)],
+        ['query'],
+      ),
+    'getMyPendingRaceCreations' : IDL.Func(
+        [],
+        [IDL.Vec(IDL.Tuple(PoolId, IDL.Nat))],
+        ['query'],
+      ),
+    'getMyRaceStakeInfo' : IDL.Func(
+        [PoolId],
+        [IDL.Opt(RaceStakeInfo)],
+        ['query'],
+      ),
+    'getMyRaceUsage' : IDL.Func(
+        [],
+        [
+          IDL.Record({
+            'created' : IDL.Nat,
+            'maxCreated' : IDL.Nat,
+            'joined' : IDL.Nat,
+            'maxJoined' : IDL.Nat,
+          }),
+        ],
+        ['query'],
+      ),
+    'getParticipants' : IDL.Func([PoolId], [Result_9], ['query']),
+    'getParticipantsPaginated' : IDL.Func(
         [PoolId, IDL.Nat, IDL.Nat],
         [Result_8],
         ['query'],
       ),
-    'getParticipants' : IDL.Func([PoolId], [Result_7], ['query']),
-    'getParticipantsPaginated' : IDL.Func(
-        [PoolId, IDL.Nat, IDL.Nat],
-        [Result_6],
-        ['query'],
-      ),
     'getPool' : IDL.Func([PoolId], [IDL.Opt(Pool)], ['query']),
-    'getPoolDepositAccount' : IDL.Func([PoolId], [Result_5], ['query']),
+    'getPoolDepositAccount' : IDL.Func([PoolId], [Result_7], ['query']),
     'getPoolObjective' : IDL.Func(
         [PoolId],
         [IDL.Opt(PoolObjective)],
         ['query'],
       ),
     'getPoolResult' : IDL.Func([PoolId], [IDL.Opt(PoolResult)], ['query']),
-    'getTeamLeaderboard' : IDL.Func([PoolId], [Result_4], ['query']),
-    'getTeamProgress' : IDL.Func([PoolId], [Result_3], ['query']),
+    'getRaceLimits' : IDL.Func(
+        [],
+        [IDL.Record({ 'maxCreated' : IDL.Nat, 'maxJoined' : IDL.Nat })],
+        ['query'],
+      ),
+    'getTeamLeaderboard' : IDL.Func([PoolId], [Result_6], ['query']),
+    'getTeamProgress' : IDL.Func([PoolId], [Result_5], ['query']),
     'getTotalNetworkFees' : IDL.Func([], [IDL.Nat], ['query']),
     'hasClaimedReward' : IDL.Func(
         [PoolId, IDL.Principal],
@@ -287,17 +336,39 @@ export const idlFactory = ({ IDL }) => {
       ),
     'hasTeamCompletedObjective' : IDL.Func(
         [PoolId, Team],
-        [Result_2],
+        [Result_4],
         ['query'],
       ),
     'isParticipant' : IDL.Func([PoolId, IDL.Principal], [IDL.Bool], ['query']),
-    'joinPool' : IDL.Func([JoinPoolRequest], [Result_1], []),
+    'joinPool' : IDL.Func([JoinPoolRequest], [Result_3], []),
     'listPools' : IDL.Func([IDL.Bool], [IDL.Vec(PoolSummary)], ['query']),
     'listPoolsPaginated' : IDL.Func(
         [ListPoolsRequest],
         [ListPoolsResponse],
         ['query'],
       ),
+    'reconcilePendingRaceCreation' : IDL.Func(
+        [PoolId, IDL.Bool],
+        [Result_1],
+        [],
+      ),
+    'reconcilePendingRaceJoin' : IDL.Func(
+        [PoolId, IDL.Principal, IDL.Bool],
+        [Result_1],
+        [],
+      ),
+    'reconcileRaceClaim' : IDL.Func(
+        [PoolId, IDL.Principal, IDL.Bool, IDL.Bool],
+        [Result_1],
+        [],
+      ),
+    'reconcileRacePrizeClaim' : IDL.Func(
+        [PoolId, IDL.Principal, IDL.Bool],
+        [Result_1],
+        [],
+      ),
+    'refundLegacySoloRace' : IDL.Func([PoolId], [Result_2], []),
+    'setRaceLimits' : IDL.Func([IDL.Nat, IDL.Nat], [Result_1], []),
     'submitRide' : IDL.Func([SubmitRideRequest], [Result], []),
   });
 };

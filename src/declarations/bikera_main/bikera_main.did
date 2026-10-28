@@ -26,30 +26,36 @@ type SystemConfig =
    tokensPerRound: TokenAmount;
  };
 type Speed = nat;
-type RoundId = nat;
-type Result_6 = 
+type RoundState = 
  variant {
-   err: text;
-   ok: vec UserId;
+   Calculating;
+   Committed;
+   Finalized;
+   Open;
  };
-type Result_5 = 
+type RoundId = nat;
+type Result_9 = 
  variant {
    err: text;
    ok:
     record {
       canisterId: text;
       canisterName: text;
+      computeAllocation: nat;
       currentRoundId: RoundId;
       cycles: nat;
+      freezingThreshold: nat;
       isPaused: bool;
+      memoryAllocation: nat;
       memorySize: nat;
+      reservedCyclesLimit: nat;
       systemConfig: SystemConfig;
       totalRounds: nat;
       uptime: Timestamp;
       version: text;
     };
  };
-type Result_4 = 
+type Result_8 = 
  variant {
    err: text;
    ok:
@@ -61,12 +67,12 @@ type Result_4 =
       total: nat;
     };
  };
-type Result_3 = 
+type Result_7 = 
  variant {
    err: text;
    ok: ContactSubmission;
  };
-type Result_2 = 
+type Result_6 = 
  variant {
    err: text;
    ok:
@@ -80,15 +86,62 @@ type Result_2 =
       version: text;
     };
  };
-type Result_1 = 
+type Result_5 = 
+ variant {
+   err: text;
+   ok:
+    record {
+      isStuck: bool;
+      monitoring:
+       opt
+        record {
+          duration: Timestamp;
+          failedSubmissions: nat;
+          retryCount: nat;
+        };
+      round: opt MiningRound;
+      timeSinceSubmission: opt Timestamp;
+    };
+ };
+type Result_4 = 
+ variant {
+   err: text;
+   ok: vec MiningRound;
+ };
+type Result_3 = 
+ variant {
+   err: text;
+   ok: record {
+         complete: bool;
+         cursor: nat;
+         processed: nat;
+         sourceSize: nat;
+       };
+ };
+type Result_2 = 
  variant {
    err: text;
    ok: ContactId;
  };
-type Result = 
+type Result_11 = 
+ variant {
+   err: text;
+   ok: vec UserId;
+ };
+type Result_10 = 
+ variant {
+   err: text;
+   ok: vec principal;
+ };
+type Result_1 = 
  variant {
    err: text;
    ok: text;
+ };
+type Result = 
+ variant {
+   err: text;
+   ok: nat;
  };
 type MiningRoundSnapshot = 
  record {
@@ -102,10 +155,17 @@ type MiningRoundSnapshot =
 type MiningRound = 
  record {
    activeUsers: vec UserId;
+   committedAt: opt Timestamp;
    endTime: Timestamp;
+   finalizedAt: opt Timestamp;
    id: RoundId;
    isCompleted: bool;
+   lastError: opt text;
+   retryCount: nat;
    startTime: Timestamp;
+   state: RoundState;
+   submittedAt: opt Timestamp;
+   timeoutAt: opt Timestamp;
    totalMined: TokenAmount;
    winners: vec UserId;
  };
@@ -133,12 +193,28 @@ type ContactStatus =
 type ContactId = text;
 type CanisterId = principal;
 service : {
-  completeMiningRound: (RoundId) -> (Result_6);
+  /// Add an administrator. Password rotation and allowlist management remain
+  /// exclusive to the immutable super-admin.
+  addAdminPrincipal: (principal) -> (Result_1);
+  /// Manual completion is an admin operation. Automatic completion uses the
+  /// private scheduler path, preventing stale or malicious clients from
+  /// generating paid update traffic.
+  completeMiningRound: (RoundId) -> (Result_11);
   /// Delete contact submission (admin only)
-  deleteContactSubmission: (ContactId) -> (Result);
+  deleteContactSubmission: (ContactId) -> (Result_1);
+  /// Force recover a stuck round (admin only)
+  forceRecoverRound: (RoundId) -> (Result_1);
+  /// Return the password version so the frontend can reject sessions created
+  /// before the most recent password rotation.
+  getAdminPasswordVersion: () -> (Result) query;
+  /// List authorized dashboard administrators. Admins may view the list, but
+  /// only the super-admin can modify it.
+  getAdminPrincipals: () -> (Result_10) query;
   /// Get all contact submissions (admin only)
   getAllContactSubmissions: (opt nat, opt ContactStatus) ->
    (vec ContactSubmission) query;
+  /// Cheap dashboard path: no consensus and no inter-canister update call.
+  getCachedSystemStats: () -> (SystemStats) query;
   getCallerText: () -> (text);
   getCanisterIds: () ->
    (record {
@@ -150,14 +226,14 @@ service : {
       xp: opt CanisterId;
     });
   /// Get canister status including cycle balance (admin only)
-  getCanisterStatus: () -> (Result_5);
+  getCanisterStatus: () -> (Result_9);
   /// Get contact statistics (admin only)
-  getContactStats: () -> (Result_4) query;
+  getContactStats: () -> (Result_8) query;
   /// Get contact submission by ID (user can only see their own, admin can see all)
-  getContactSubmission: (ContactId) -> (Result_3) query;
+  getContactSubmission: (ContactId) -> (Result_7) query;
   getCurrentRound: () -> (opt MiningRound) query;
   /// Get frontend canister status (bikera_main is a controller, so it can query it)
-  getFrontendCanisterStatus: () -> (Result_2);
+  getFrontendCanisterStatus: () -> (Result_6);
   /// Get complete mining round data in single query
   /// Replaces: getCurrentRound(), getUserWins(), getTopWinners()
   /// Result: 1 call instead of 3+ calls (3X reduction)
@@ -165,28 +241,59 @@ service : {
   /// Get all contact submissions for current user
   getMyContactSubmissions: () -> (vec ContactSubmission) query;
   getRound: (RoundId) -> (opt MiningRound) query;
+  getRoundArchiveStatus: () ->
+   (record {
+      archiveDataBytes: nat64;
+      archiveDataPages: nat64;
+      cycleBalance: nat;
+      hotRoundCount: nat;
+      indexedUsers: nat;
+      migrationComplete: bool;
+      migrationCursor: nat;
+      migrationSourceSize: nat;
+    }) query;
+  /// Get round monitoring data (admin only)
+  getRoundMonitoring: (RoundId) -> (Result_5) query;
+  /// Get all stuck rounds (admin only)
+  getStuckRounds: () -> (Result_4) query;
+  /// Expose the immutable owner so the dashboard can hide owner-only controls
+  /// from regular administrators.
+  getSuperAdminPrincipal: () -> (principal) query;
   getSystemConfig: () -> (SystemConfig) query;
   /// Get current system statistics
-  /// NOTE: Changed from query to async to allow inter-canister calls
+  /// NOTE: Active user count is cached to reduce inter-canister load
   getSystemStats: () -> (SystemStats);
   /// Initialize all canister references for inter-canister communication
   /// NOTE: Canisters are pre-initialized with production IDs, but this function
   /// allows updating them if needed (e.g., for testing or migration)
   /// If null is passed for any canister, uses production ID as default
   initializeCanisters: (opt CanisterId, opt CanisterId, opt CanisterId,
-   opt CanisterId, opt CanisterId, opt CanisterId) -> (Result);
+   opt CanisterId, opt CanisterId, opt CanisterId) -> (Result_1);
   /// Check if automated mining is active
   isAutomatedMiningActive: () -> (bool) query;
+  /// Run an explicit bounded migration batch. This lets operations finish the
+  /// one-time archive migration before the next deployment without a single
+  /// unbounded instruction-heavy update.
+  migrateRoundArchive: (nat) -> (Result_3);
+  /// Remove a regular administrator. The immutable super-admin cannot be
+  /// removed, preventing the dashboard from being orphaned.
+  removeAdminPrincipal: (principal) -> (Result_1);
   /// Reset entire system (admin only)
-  resetSystem: () -> (Result);
+  resetSystem: () -> (Result_1);
+  /// Rotate the super-admin password. Passwords arrive as PBKDF2-derived digests and
+  /// only the digest is persisted. The version advances so older sessions are stale.
+  rotateAdminPassword: (text, text) -> (Result);
   /// Start automated 5-minute mining rounds
-  startAutomatedMining: () -> (Result);
+  startAutomatedMining: () -> (Result_1);
   /// Stop automated mining rounds
-  stopAutomatedMining: () -> (Result);
+  stopAutomatedMining: () -> (Result_1);
   /// Submit a contact form (anyone can submit)
-  submitContactForm: (text, text, text, text) -> (Result_1);
+  submitContactForm: (text, text, text, text) -> (Result_2);
   /// Update contact submission status (admin only)
-  updateContactStatus: (ContactId, ContactStatus, opt text) -> (Result);
+  updateContactStatus: (ContactId, ContactStatus, opt text) -> (Result_1);
   /// Update system configuration (admin only)
-  updateSystemConfig: (SystemConfig) -> (Result);
+  updateSystemConfig: (SystemConfig) -> (Result_1);
+  /// Verify the admin password digest and return its current rotation version.
+  /// The Internet Identity principal remains the primary authorization boundary.
+  verifyAdminPassword: (text) -> (Result);
 }

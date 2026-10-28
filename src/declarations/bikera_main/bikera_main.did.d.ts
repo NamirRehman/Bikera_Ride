@@ -28,6 +28,13 @@ export interface MiningRound {
   'totalMined' : TokenAmount,
   'isCompleted' : boolean,
   'endTime' : Timestamp,
+  'timeoutAt' : [] | [Timestamp],
+  'submittedAt' : [] | [Timestamp],
+  'state' : RoundState,
+  'retryCount' : bigint,
+  'finalizedAt' : [] | [Timestamp],
+  'lastError' : [] | [string],
+  'committedAt' : [] | [Timestamp],
   'winners' : Array<UserId>,
 }
 export interface MiningRoundSnapshot {
@@ -38,11 +45,43 @@ export interface MiningRoundSnapshot {
   'topWinners' : Array<UserId>,
   'userTotalDistance' : Distance,
 }
-export type Result = { 'ok' : string } |
+export type Result = { 'ok' : bigint } |
   { 'err' : string };
-export type Result_1 = { 'ok' : ContactId } |
+export type Result_1 = { 'ok' : string } |
   { 'err' : string };
-export type Result_2 = {
+export type Result_10 = { 'ok' : Array<Principal> } |
+  { 'err' : string };
+export type Result_11 = { 'ok' : Array<UserId> } |
+  { 'err' : string };
+export type Result_2 = { 'ok' : ContactId } |
+  { 'err' : string };
+export type Result_3 = {
+    'ok' : {
+      'cursor' : bigint,
+      'sourceSize' : bigint,
+      'complete' : boolean,
+      'processed' : bigint,
+    }
+  } |
+  { 'err' : string };
+export type Result_4 = { 'ok' : Array<MiningRound> } |
+  { 'err' : string };
+export type Result_5 = {
+    'ok' : {
+      'isStuck' : boolean,
+      'timeSinceSubmission' : [] | [Timestamp],
+      'monitoring' : [] | [
+        {
+          'duration' : Timestamp,
+          'failedSubmissions' : bigint,
+          'retryCount' : bigint,
+        }
+      ],
+      'round' : [] | [MiningRound],
+    }
+  } |
+  { 'err' : string };
+export type Result_6 = {
     'ok' : {
       'canisterName' : string,
       'isPaused' : boolean,
@@ -54,9 +93,9 @@ export type Result_2 = {
     }
   } |
   { 'err' : string };
-export type Result_3 = { 'ok' : ContactSubmission } |
+export type Result_7 = { 'ok' : ContactSubmission } |
   { 'err' : string };
-export type Result_4 = {
+export type Result_8 = {
     'ok' : {
       'resolved' : bigint,
       'closed' : bigint,
@@ -66,24 +105,30 @@ export type Result_4 = {
     }
   } |
   { 'err' : string };
-export type Result_5 = {
+export type Result_9 = {
     'ok' : {
       'canisterName' : string,
+      'freezingThreshold' : bigint,
       'isPaused' : boolean,
       'version' : string,
       'cycles' : bigint,
       'uptime' : Timestamp,
       'totalRounds' : bigint,
       'currentRoundId' : RoundId,
+      'memoryAllocation' : bigint,
       'systemConfig' : SystemConfig,
+      'computeAllocation' : bigint,
+      'reservedCyclesLimit' : bigint,
       'memorySize' : bigint,
       'canisterId' : string,
     }
   } |
   { 'err' : string };
-export type Result_6 = { 'ok' : Array<UserId> } |
-  { 'err' : string };
 export type RoundId = bigint;
+export type RoundState = { 'Calculating' : null } |
+  { 'Committed' : null } |
+  { 'Open' : null } |
+  { 'Finalized' : null };
 export type Speed = bigint;
 export interface SystemConfig {
   'claimCooldown' : bigint,
@@ -111,12 +156,17 @@ export type Timestamp = bigint;
 export type TokenAmount = bigint;
 export type UserId = Principal;
 export interface _SERVICE {
-  'completeMiningRound' : ActorMethod<[RoundId], Result_6>,
-  'deleteContactSubmission' : ActorMethod<[ContactId], Result>,
+  'addAdminPrincipal' : ActorMethod<[Principal], Result_1>,
+  'completeMiningRound' : ActorMethod<[RoundId], Result_11>,
+  'deleteContactSubmission' : ActorMethod<[ContactId], Result_1>,
+  'forceRecoverRound' : ActorMethod<[RoundId], Result_1>,
+  'getAdminPasswordVersion' : ActorMethod<[], Result>,
+  'getAdminPrincipals' : ActorMethod<[], Result_10>,
   'getAllContactSubmissions' : ActorMethod<
     [[] | [bigint], [] | [ContactStatus]],
     Array<ContactSubmission>
   >,
+  'getCachedSystemStats' : ActorMethod<[], SystemStats>,
   'getCallerText' : ActorMethod<[], string>,
   'getCanisterIds' : ActorMethod<
     [],
@@ -129,14 +179,30 @@ export interface _SERVICE {
       'imera' : [] | [CanisterId],
     }
   >,
-  'getCanisterStatus' : ActorMethod<[], Result_5>,
-  'getContactStats' : ActorMethod<[], Result_4>,
-  'getContactSubmission' : ActorMethod<[ContactId], Result_3>,
+  'getCanisterStatus' : ActorMethod<[], Result_9>,
+  'getContactStats' : ActorMethod<[], Result_8>,
+  'getContactSubmission' : ActorMethod<[ContactId], Result_7>,
   'getCurrentRound' : ActorMethod<[], [] | [MiningRound]>,
-  'getFrontendCanisterStatus' : ActorMethod<[], Result_2>,
+  'getFrontendCanisterStatus' : ActorMethod<[], Result_6>,
   'getMiningRoundSnapshot' : ActorMethod<[UserId], MiningRoundSnapshot>,
   'getMyContactSubmissions' : ActorMethod<[], Array<ContactSubmission>>,
   'getRound' : ActorMethod<[RoundId], [] | [MiningRound]>,
+  'getRoundArchiveStatus' : ActorMethod<
+    [],
+    {
+      'indexedUsers' : bigint,
+      'hotRoundCount' : bigint,
+      'cycleBalance' : bigint,
+      'migrationCursor' : bigint,
+      'archiveDataPages' : bigint,
+      'archiveDataBytes' : bigint,
+      'migrationComplete' : boolean,
+      'migrationSourceSize' : bigint,
+    }
+  >,
+  'getRoundMonitoring' : ActorMethod<[RoundId], Result_5>,
+  'getStuckRounds' : ActorMethod<[], Result_4>,
+  'getSuperAdminPrincipal' : ActorMethod<[], Principal>,
   'getSystemConfig' : ActorMethod<[], SystemConfig>,
   'getSystemStats' : ActorMethod<[], SystemStats>,
   'initializeCanisters' : ActorMethod<
@@ -148,18 +214,22 @@ export interface _SERVICE {
       [] | [CanisterId],
       [] | [CanisterId],
     ],
-    Result
+    Result_1
   >,
   'isAutomatedMiningActive' : ActorMethod<[], boolean>,
-  'resetSystem' : ActorMethod<[], Result>,
-  'startAutomatedMining' : ActorMethod<[], Result>,
-  'stopAutomatedMining' : ActorMethod<[], Result>,
-  'submitContactForm' : ActorMethod<[string, string, string, string], Result_1>,
+  'migrateRoundArchive' : ActorMethod<[bigint], Result_3>,
+  'removeAdminPrincipal' : ActorMethod<[Principal], Result_1>,
+  'resetSystem' : ActorMethod<[], Result_1>,
+  'rotateAdminPassword' : ActorMethod<[string, string], Result>,
+  'startAutomatedMining' : ActorMethod<[], Result_1>,
+  'stopAutomatedMining' : ActorMethod<[], Result_1>,
+  'submitContactForm' : ActorMethod<[string, string, string, string], Result_2>,
   'updateContactStatus' : ActorMethod<
     [ContactId, ContactStatus, [] | [string]],
-    Result
+    Result_1
   >,
-  'updateSystemConfig' : ActorMethod<[SystemConfig], Result>,
+  'updateSystemConfig' : ActorMethod<[SystemConfig], Result_1>,
+  'verifyAdminPassword' : ActorMethod<[string], Result>,
 }
 export declare const idlFactory: IDL.InterfaceFactory;
 export declare const init: (args: { IDL: typeof IDL }) => IDL.Type[];

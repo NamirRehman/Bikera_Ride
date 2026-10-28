@@ -17,6 +17,7 @@ import { useCachedData } from '../hooks/useCachedData';
 import { invalidateFriendsCache } from '../utils/cacheHelpers';
 import { fetchPublicUserSummary, type PublicUserSummary } from '../services/userSummary';
 import { runInBatches } from '../utils/batch';
+import { formatXp } from '../utils/format';
 
 type Tab = 'friends' | 'requests';
 const FRIEND_PAGE_SIZE = 10;
@@ -481,7 +482,7 @@ export function FriendsScreen() {
       <View style={styles.friendStats}>
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>XP</Text>
-          <Text style={styles.statValue}>{item.xp.toLocaleString()}</Text>
+          <Text style={styles.statValue}>{formatXp(item.xp)}</Text>
         </View>
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>Distance</Text>

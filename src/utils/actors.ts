@@ -9,6 +9,7 @@ import { createActor as createBikeraXpActor } from "../declarations/bikera_xp";
 import { createActor as createBikeraRewardsActor } from "../declarations/bikera_rewards";
 import { createActor as createBikeraImeraActor } from "../declarations/bikera_imera";
 import { createActor as createBikeraPoolsActor } from "../declarations/bikera_pools";
+import { createActor as createBikeraMobilityActor } from "../declarations/bikera_mobility";
 import { createActor as createBikeraBridgeActor } from "../declarations/bikera_bridge";
 import { createActor as createBikeraConsensusActor } from "../declarations/bikera_consensus";
 
@@ -55,6 +56,8 @@ const PRODUCTION_CANISTER_IDS = {
   bikera_bridge: "plel7-eqaaa-aaaap-an5ca-cai",
   bikera_consensus: "f7533-5iaaa-aaaap-an42q-cai",
   bikera_pools: "irhdx-giaaa-aaaap-an5qq-cai",
+  // Partner bike-share operators and ride hand-offs (QR scanner).
+  bikera_mobility: "7mkgk-qyaaa-aaaap-an6pq-cai",
 } as const;
 
 // Always use production canister IDs
@@ -184,6 +187,9 @@ export const getBikeraConsensusActor = (options: CreateActorOptions = {}) =>
 
 export const getBikeraPoolsActor = (options: CreateActorOptions = {}) => 
   createBikeraPoolsActor(CANISTER_IDS.bikera_pools, getActorOptions(options));
+
+export const getBikeraMobilityActor = (options: CreateActorOptions = {}, identity?: any) =>
+  createBikeraMobilityActor(CANISTER_IDS.bikera_mobility, getActorOptions(options, identity));
 
 // Generic accessor if you have the canister name dynamically
 export type CanisterName = keyof typeof canisterIds;
