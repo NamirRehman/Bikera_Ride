@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { InteractionManager } from 'react-native';
+import { startTransition, useState, useEffect, useCallback, useRef } from 'react';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { dataCache, type CacheChangeEvent } from '../services/dataCache';
 import { requestDeduplicator } from '../services/requestDeduplicator';
 import { appStateManager } from '../services/appStateManager';
 import { startupGate } from '../services/startupGate';
+import { yieldToMain } from '../utils/yieldToMain';
 
 interface UseCachedDataOptions<T> {
   type: string;
@@ -137,6 +137,26 @@ export function useCachedData<T>({
     }
     const key = cacheKey(type, identifier);
 
+    const applyFresh = (freshData: T) => {
+      dataRef.current = freshData;
+      resolvedRef.current = true;
+      lastSuccessAtRef.current = Date.now();
+      // Transition update: a tab press can commit ahead of this heavy render.
+      startTransition(() => {
+        if (!mountedRef.current) return;
+        setData(freshData);
+        setLoading(false);
+        setError(null);
+      });
+      // JSON cache writes and success callbacks stay off the paint turn.
+      setTimeout(() => {
+        if (!skipCache) {
+          void dataCache.set(type, { v: freshData } satisfies CacheEnvelope<T>, identifier, customTtl);
+        }
+        if (mountedRef.current) onSuccessRef.current?.(freshData);
+      }, 0);
+    };
+
     try {
       if (!forceRefresh && !skipCache) {
         if (withinMinInterval() && resolvedRef.current) {
@@ -171,30 +191,30 @@ export function useCachedData<T>({
             return;
           }
 
-          InteractionManager.runAfterInteractions(() => {
-            requestDeduplicator
-              .execute(key, () => fetcherRef.current(), timeoutRef.current)
-              .then((freshData) => {
-                if (mountedRef.current) {
-                  dataRef.current = freshData;
-                  resolvedRef.current = true;
-                  lastSuccessAtRef.current = Date.now();
-                  setData(freshData);
-                  dataCache.set(type, { v: freshData } satisfies CacheEnvelope<T>, identifier, customTtl);
-                  onSuccessRef.current?.(freshData);
-                }
-              })
-              .catch((err) => {
-                if (__DEV__) console.warn(`[CACHE] Background refresh failed for ${type}:`, err);
-              });
-          });
+          void (async () => {
+            await yieldToMain();
+            if (!mountedRef.current || !isFocusedRef.current) return;
+            try {
+              const freshData = await requestDeduplicator.execute(
+                key,
+                () => fetcherRef.current(),
+                timeoutRef.current
+              );
+              await yieldToMain();
+              if (!mountedRef.current) return;
+              applyFresh(freshData);
+            } catch (err) {
+              if (__DEV__) console.warn(`[CACHE] Background refresh failed for ${type}:`, err);
+            }
+          })();
           return;
         }
       }
 
       // No cache — need network. Block non-bootstrap until gate opens.
+      // Keep loading=true so screens don't flash an empty state while waiting for unlock.
       if (!forceRefresh && !networkAllowed()) {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current && !resolvedRef.current) setLoading(true);
         return;
       }
 
@@ -204,31 +224,19 @@ export function useCachedData<T>({
       }
 
       const runFetch = async () => {
+        // Paint the loader and flush a queued tab press before actor setup.
+        await yieldToMain();
+        if (!mountedRef.current) return;
+        if (tierRef.current !== 'bootstrap' && !isFocusedRef.current) return;
+
         const freshData = await requestDeduplicator.execute(key, () => fetcherRef.current(), timeoutRef.current);
-        if (mountedRef.current) {
-          dataRef.current = freshData;
-          resolvedRef.current = true;
-          lastSuccessAtRef.current = Date.now();
-          setData(freshData);
-          setLoading(false);
-          setError(null);
-          if (!skipCache) {
-            await dataCache.set(type, { v: freshData } satisfies CacheEnvelope<T>, identifier, customTtl);
-          }
-          onSuccessRef.current?.(freshData);
-        }
+        // Decode already ran inside the request. Let navigation run before setState.
+        await yieldToMain();
+        if (!mountedRef.current) return;
+        applyFresh(freshData);
       };
 
-      if (tierRef.current === 'bootstrap') {
-        await runFetch();
-      } else {
-        await new Promise<void>((resolve) => {
-          InteractionManager.runAfterInteractions(() => resolve());
-        });
-        if (!mountedRef.current || !isFocusedRef.current) {
-          if (mountedRef.current) setLoading(false);
-          return;
-        }
+      if (tierRef.current === 'bootstrap' || isFocusedRef.current) {
         await runFetch();
       }
     } catch (err: any) {
@@ -301,8 +309,9 @@ export function useCachedData<T>({
         return undefined;
       }
 
-      // Wait for Home cold-start to finish before any other screen networks
-      setLoading(false);
+      // Wait for Home cold-start — keep spinner if we have nothing cached yet
+      if (!resolvedRef.current) setLoading(true);
+      else setLoading(false);
       return startupGate.subscribe(() => {
         if (isFocusedRef.current) run();
       });

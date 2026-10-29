@@ -14,11 +14,8 @@ import { colors } from '../theme/tokens';
 import { useCachedData } from '../hooks/useCachedData';
 import { getBikeraImeraActor, getBikeraRewardsActor, getHost } from '../utils/actors';
 import { WEB_APP_URL } from '../config';
-import { formatImera } from '../utils/format';
 import { GuestBanner } from '../components/GuestBanner';
-
-const TOKEN_DECIMALS = 8;
-const TOKEN_DECIMALS_MULTIPLIER = BigInt(10 ** TOKEN_DECIMALS);
+import { E8S_PER_TOKEN, formatImera, fromE8s } from '../utils/formatStats';
 
 interface Transaction {
   id: string;
@@ -27,7 +24,10 @@ interface Transaction {
 }
 
 function BalanceCard({ balance, loading }: { balance: number; loading: boolean }) {
-  const formattedBalance = useMemo(() => formatImera(balance), [balance]);
+  const formattedBalance = useMemo(
+    () => formatImera(balance, { minFractionDigits: 2, maxFractionDigits: 4 }),
+    [balance]
+  );
 
   return (
     <Card style={styles.balanceCard}>
@@ -70,7 +70,7 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
         <Text style={styles.transactionDate}>{formattedDate}</Text>
       </View>
       <Text style={styles.transactionAmountText}>
-        +{formatImera(transaction.amount)} iMERA
+        +{formatImera(transaction.amount, { minFractionDigits: 2, maxFractionDigits: 4 })} iMERA
       </Text>
     </View>
   );
@@ -113,22 +113,27 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
 
     const recentRewards = Array.isArray(rewardsSnapshot?.recentRewards) ? rewardsSnapshot.recentRewards : [];
     const transactions: Transaction[] = recentRewards
-      .map((reward: any, index: number) => ({
-        id: `reward-${index}-${reward.roundId ?? index}`,
-        amount: Number(reward.amount || 0) / Number(TOKEN_DECIMALS_MULTIPLIER),
-        timestamp: Number(reward.timestamp || 0) / 1_000_000 || Date.now(),
-      }))
+      .map((reward: any, index: number) => {
+        const raw = Number(reward.amount || 0);
+        // Mining snapshots store whole tokens; ledger amounts are e8s.
+        const amount = raw >= E8S_PER_TOKEN / 1000 ? fromE8s(raw) : raw;
+        return {
+          id: `reward-${index}-${reward.roundId ?? index}`,
+          amount,
+          timestamp: Number(reward.timestamp || 0) / 1_000_000 || Date.now(),
+        };
+      })
       .sort((a: Transaction, b: Transaction) => b.timestamp - a.timestamp)
       .slice(0, 100);
 
     return {
-      balance: Number(balance) / Number(TOKEN_DECIMALS_MULTIPLIER),
+      balance: fromE8s(balance),
       transactions,
     };
   }, [principal, getIdentity]);
 
   const { data: walletData, loading, refetch } = useCachedData({
-    type: 'wallet',
+    type: 'wallet_v2',
     identifier: principal || undefined,
     fetcher: fetchWalletData,
     enabled: !!principal,

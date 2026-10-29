@@ -66,6 +66,16 @@ type RouteValidation =
    userId: UserId;
    violations: vec ValidationViolation;
  };
+type RouteSummary =
+ record {
+   avgSpeed: Speed;
+   createdAt: Timestamp;
+   duration: nat;
+   isValid: bool;
+   maxSpeed: Speed;
+   routeId: text;
+   totalDistance: Distance;
+ };
 type Result_2 = 
  variant {
    err: text;
@@ -132,6 +142,7 @@ service : {
   getSuspiciousPatterns: (UserId) -> (vec text) query;
   getUserDailyRouteCount: (UserId, nat) -> (nat) query;
   getUserRouteHistory: (UserId, opt nat) -> (vec RouteValidation) query;
+  getUserRouteSummaries: (UserId, opt nat) -> (vec RouteSummary) query;
   getValidationConfig: () -> (ValidationConfig) query;
   getValidationResult: (text) -> (opt RouteValidation) query;
   /// Mark suspicious pattern (admin only)

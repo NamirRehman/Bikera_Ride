@@ -44,6 +44,15 @@ export type Result_2 = {
     }
   } |
   { 'err' : string };
+export interface RouteSummary {
+  'duration' : bigint,
+  'avgSpeed' : Speed,
+  'maxSpeed' : Speed,
+  'createdAt' : Timestamp,
+  'routeId' : string,
+  'totalDistance' : Distance,
+  'isValid' : boolean,
+}
 export interface RouteValidation {
   'duration' : bigint,
   'avgSpeed' : Speed,
@@ -116,6 +125,10 @@ export interface _SERVICE {
   'getUserRouteHistory' : ActorMethod<
     [UserId, [] | [bigint]],
     Array<RouteValidation>
+  >,
+  'getUserRouteSummaries' : ActorMethod<
+    [UserId, [] | [bigint]],
+    Array<RouteSummary>
   >,
   'getValidationConfig' : ActorMethod<[], ValidationConfig>,
   'getValidationResult' : ActorMethod<[string], [] | [RouteValidation]>,

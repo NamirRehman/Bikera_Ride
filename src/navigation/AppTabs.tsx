@@ -5,8 +5,14 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { CommonActions } from '@react-navigation/native';
 
 import type { AppTabsParamList, MoreStackParamList } from './types';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AnimatedTabBar } from '../components/AnimatedTabBar';
 import { rideAutoStart } from '../services/rideAutoStart';
+
+/** Must return JSX — React Navigation calls tabBar as a render fn, not as a component. */
+function renderTabBar(props: BottomTabBarProps) {
+  return <AnimatedTabBar {...props} />;
+}
 
 const getDashboardScreen = () => require('../screens/DashboardScreen').DashboardScreen;
 const getTrackScreen = () => require('../screens/TrackScreen').TrackScreen;
@@ -72,21 +78,17 @@ export function AppTabs() {
 
   return (
     <Tab.Navigator
-      key={initialRoute}
       initialRouteName={initialRoute}
-      tabBar={(props) => <AnimatedTabBar {...props} />}
-      detachInactiveScreens
+      tabBar={renderTabBar}
+      // Keep inactive tabs attached so switching back does not pay a native
+      // detach/reattach hitch while data is still loading.
+      detachInactiveScreens={false}
       screenOptions={{
         headerShown: false,
         freezeOnBlur: true,
         lazy: true,
-        animation: 'fade',
-        transitionSpec: {
-          animation: 'timing',
-          config: {
-            duration: 220,
-          },
-        },
+        // Instant tab switches — fade felt glitchy over heavy list/track screens
+        animation: 'none',
         sceneStyle: { backgroundColor: '#000000' },
         tabBarHideOnKeyboard: true,
       }}

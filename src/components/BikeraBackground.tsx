@@ -1,48 +1,19 @@
 import React, { memo } from 'react';
-import { View, StyleSheet, type ColorValue } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { colors, gradients } from '../theme/tokens';
+import { StyleSheet, View } from 'react-native';
 
+import { colors } from '../theme/tokens';
+
+/**
+ * Flat fill. A full-screen gradient plus glow circles was redrawn on every
+ * tab switch and every scroll.
+ */
 export const BikeraBackground = memo(function BikeraBackground() {
-  return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      <LinearGradient
-        colors={[...gradients.background] as [ColorValue, ColorValue, ...ColorValue[]]}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      {/* soft brand glow top-right - more subtle */}
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          top: -80,
-          right: -80,
-          width: 200,
-          height: 200,
-          borderRadius: 9999,
-          backgroundColor: colors.brandPurple,
-          opacity: 0.14,
-        }}
-      />
-      {/* soft brand glow bottom-left - more subtle */}
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          bottom: -100,
-          left: -100,
-          width: 240,
-          height: 240,
-          borderRadius: 9999,
-          backgroundColor: colors.brandBlue300,
-          opacity: 0.12,
-        }}
-      />
-      {/* subtle overlay - reduced opacity */}
-      <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.18)' }} />
-    </View>
-  );
+  return <View pointerEvents="none" style={styles.fill} />;
 });
 
+const styles = StyleSheet.create({
+  fill: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.surface1,
+  },
+});

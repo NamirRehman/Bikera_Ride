@@ -12,17 +12,16 @@ import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
 import { ThreeDotLoader } from '../components/ThreeDotLoader';
+import { ListSkeleton } from '../components/ListSkeleton';
 import { GuestBanner } from '../components/GuestBanner';
 import { useCachedData } from '../hooks/useCachedData';
 import { invalidateFriendsCache } from '../utils/cacheHelpers';
-import { fetchPublicUserSummary, type PublicUserSummary } from '../services/userSummary';
-import { runInBatches } from '../utils/batch';
-import { formatXp } from '../utils/format';
+import { fetchPublicCards, type PublicUserSummary } from '../services/userSummary';
+import { formatDistanceKmLabel, formatXP } from '../utils/formatStats';
 
 type Tab = 'friends' | 'requests';
 const FRIEND_PAGE_SIZE = 10;
 const REQUEST_PAGE_SIZE = 10;
-const SUMMARY_BATCH_SIZE = 6;
 
 interface Friend {
   id: string;
@@ -166,7 +165,7 @@ export function FriendsScreen() {
   const loadSummaries = useCallback(async (ids: string[]) => {
     const missing = ids.filter((id) => !summariesRef.current[id]);
     if (missing.length === 0) return;
-    const results = await runInBatches(missing, SUMMARY_BATCH_SIZE, (id) => fetchPublicUserSummary(id));
+    const results = await fetchPublicCards(missing);
     const updates: Record<string, PublicUserSummary> = {};
     missing.forEach((id, index) => {
       updates[id] = results[index];
@@ -384,20 +383,20 @@ export function FriendsScreen() {
           const hits: DiscoverHit[] = [];
           const q = query.toLowerCase();
 
-          await runInBatches(rows, SUMMARY_BATCH_SIZE, async ([userId]) => {
-            if (cancelled || hits.length >= 8) return null;
-            const id = userId.toText();
-            if (friendSet.has(id) || id === self) return null;
-            const summary = await fetchPublicUserSummary(userId);
+          const candidates = rows
+            .map(([userId]) => userId.toText())
+            .filter((id: string) => !friendSet.has(id) && id !== self);
+          const cards = await fetchPublicCards(candidates);
+          for (const summary of cards) {
+            if (hits.length >= 8) break;
             if (summary.username.toLowerCase().includes(q)) {
               hits.push({
-                id,
+                id: summary.userId,
                 username: summary.username,
                 level: summary.level ?? 1,
               });
             }
-            return null;
-          });
+          }
 
           if (!cancelled) {
             setDiscoverResults(hits);
@@ -482,11 +481,11 @@ export function FriendsScreen() {
       <View style={styles.friendStats}>
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>XP</Text>
-          <Text style={styles.statValue}>{formatXp(item.xp)}</Text>
+          <Text style={styles.statValue}>{formatXP(item.xp)}</Text>
         </View>
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>Distance</Text>
-          <Text style={styles.statValue}>{item.distance.toFixed(1)} km</Text>
+          <Text style={styles.statValue}>{formatDistanceKmLabel(item.distance)}</Text>
         </View>
       </View>
     </View>
@@ -674,8 +673,8 @@ export function FriendsScreen() {
       </View>
 
       <FlatList<Friend | FriendRequest>
-        key={tab}
         data={listData}
+        extraData={tab}
         keyExtractor={(item) => item.id}
         renderItem={
           tab === 'friends'
@@ -684,9 +683,7 @@ export function FriendsScreen() {
         }
         ListEmptyComponent={
           loading ? (
-            <View style={styles.loadingContainer}>
-              <ThreeDotLoader color={colors.brandPurple} size="large" />
-            </View>
+            <ListSkeleton rows={4} />
           ) : emptyMessage ? (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>{emptyMessage.title}</Text>
@@ -716,9 +713,10 @@ export function FriendsScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         initialNumToRender={tab === 'friends' ? FRIEND_PAGE_SIZE : REQUEST_PAGE_SIZE}
-        maxToRenderPerBatch={6}
-        windowSize={5}
-        removeClippedSubviews={false}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews
       />
     </Screen>
   );

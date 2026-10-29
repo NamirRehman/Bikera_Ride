@@ -11,7 +11,7 @@ export async function runInBatches<T, R>(
   items: T[],
   batchSize: number,
   worker: (item: T) => Promise<R>,
-  onBatch?: (batch: T[], results: R[]) => void
+  onBatch?: (batch: T[], results: R[]) => void | Promise<void>
 ): Promise<R[]> {
   if (items.length === 0) return [];
   const results: R[] = [];
@@ -20,7 +20,7 @@ export async function runInBatches<T, R>(
     const batch = items.slice(i, i + size);
     const batchResults = await Promise.all(batch.map(worker));
     results.push(...batchResults);
-    onBatch?.(batch, batchResults);
+    await onBatch?.(batch, batchResults);
   }
   return results;
 }

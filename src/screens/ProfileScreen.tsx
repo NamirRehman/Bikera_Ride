@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { logger } from '../utils/logger';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Pressable, Text, View, StyleSheet, ScrollView, TextInput, Alert, Modal, Switch, Clipboard, KeyboardAvoidingView, Platform, Dimensions, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,16 +11,15 @@ import { ThreeDotLoader } from '../components/ThreeDotLoader';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../theme/ThemeContext';
 import { colors } from '../theme/tokens';
-import { getBikeraUserActor, getBikeraXpActor, getBikeraImeraActor, getShadowClient, getHost } from '../utils/actors';
-import { HttpAgent } from '@dfinity/agent';
+import { getBikeraUserActor, getBikeraXpActor, getBikeraImeraActor } from '../utils/actors';
 import { useCachedData } from '../hooks/useCachedData';
 import { invalidateProfileCache } from '../utils/cacheHelpers';
+import { formatDistanceKmLabel, formatImera, formatXP, fromE8s, normalizeImera } from '../utils/formatStats';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { WalletScreen } from './WalletScreen';
 import { WEB_APP_URL } from '../config';
 import { GuestBanner } from '../components/GuestBanner';
 import { applyCountryTag, parseCountryFromBio, stripCountryTag, getStoredCountry, saveUserCountry, clearUserCountry, COUNTRY_OPTIONS, countryName, countryFlag } from '../services/userCountry';
-import { formatXp } from '../utils/format';
 
 function SettingRow({ icon, label, value, onPress, isDestructive = false, rightComponent }: any) {
   return (
@@ -49,13 +49,20 @@ export function ProfileScreen() {
   const [showUpdateForm, setShowUpdateForm] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
   const [profileCountry, setProfileCountry] = useState<string | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
 
+  const filteredCountryOptions = useMemo(() => {
+    const q = countrySearch.trim().toLowerCase();
+    if (!q) return COUNTRY_OPTIONS;
+    return COUNTRY_OPTIONS.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
+    );
+  }, [countrySearch]);
+
   // Profile Data
   const [profile, setProfile] = useState<any>(null);
-  const [userStats, setUserStats] = useState<any>(null);
-  const [xpData, setXpData] = useState<any>(null);
   const [totalXP, setTotalXP] = useState(0);
   const [level, setLevel] = useState(1);
   const [totalDistance, setTotalDistance] = useState(0);
@@ -114,33 +121,19 @@ export function ProfileScreen() {
     const principalToUse = identityPrincipal !== principal ? identityPrincipal : principal;
     const userId = Principal.fromText(principalToUse);
 
-    const host = getHost();
-    const isDevelopment = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
-    const agent = new HttpAgent({
-      host,
-      identity,
-      fetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-    });
-
-    if (isDevelopment) {
-      await agent.fetchRootKey();
-    }
-
-    const shadow = getShadowClient(agent);
     const userActor = getBikeraUserActor({}, identity);
+    const xpActor = getBikeraXpActor({}, identity);
     const imeraActor = getBikeraImeraActor({}, identity);
 
-    const [profileOpt, stats, xpSnapshot, imeraBalance] = await Promise.all([
+    const [profileOpt, xpProfile, imeraBalance] = await Promise.all([
       userActor.getCurrentUserProfile(userId).catch(() => []),
-      shadow.getUserDashboardSnapshot(userId, true).then((snapshot: any) => snapshot?.stats || null).catch(() => null),
-      shadow.getXPSnapshot(userId, true).catch(() => null),
+      xpActor.getPublicUserXPProfile(userId).catch(() => null),
       imeraActor.icrc1_balance_of({ owner: userId, subaccount: [] }).catch(() => 0n),
     ]);
 
     return {
       profile: Array.isArray(profileOpt) && profileOpt.length > 0 ? profileOpt[0] : null,
-      stats,
-      xpSnapshot,
+      xpProfile,
       imeraBalance: Number(imeraBalance),
     };
   }, [principal, getIdentity]);
@@ -217,22 +210,16 @@ export function ProfileScreen() {
 
         setTotalDistance(Number(profile.totalDistance || 0));
         setTotalXP(Number(profile.totalXP || 0));
-        setTotalIMERA(Number(profile.totalIMERA || 0));
+        setTotalIMERA(normalizeImera(profile.totalIMERA || 0));
       }
 
-      if (profileData.stats) {
-        setUserStats(profileData.stats);
+      if (profileData.xpProfile) {
+        setLevel(Number(profileData.xpProfile.currentLevel || 1));
+        setTotalXP(Number(profileData.xpProfile.totalXP || 0));
       }
 
-      if (profileData.xpSnapshot) {
-        setXpData(profileData.xpSnapshot);
-        setLevel(Number(profileData.xpSnapshot.level || 1));
-        setTotalXP(Number(profileData.xpSnapshot.totalXP || 0));
-      }
-
-      if (profileData.imeraBalance) {
-        const imeraNum = Number(profileData.imeraBalance) / 100_000_000;
-        setTotalIMERA(imeraNum);
+      if (profileData.imeraBalance !== undefined && profileData.imeraBalance !== null) {
+        setTotalIMERA(normalizeImera(profileData.imeraBalance));
       }
 
       setLoading(false);
@@ -396,17 +383,17 @@ export function ProfileScreen() {
   };
 
   const handleDeleteAccount = async () => {
-    console.log('[PROFILE] handleDeleteAccount called, confirmation:', deleteConfirmation);
+    logger.log('[PROFILE] handleDeleteAccount called, confirmation:', deleteConfirmation);
 
     if (deleteConfirmation !== 'DELETE') {
-      console.log('[PROFILE] Confirmation text does not match DELETE');
+      logger.log('[PROFILE] Confirmation text does not match DELETE');
       error('Configuration Required', 'Please type DELETE to confirm');
       return;
     }
 
     // Proceed directly with deletion - the "DELETE" confirmation is sufficient
     // Nested Alert.alert doesn't work well on mobile when already in a modal
-    console.log('[PROFILE] Confirmation verified, proceeding with deletion');
+    logger.log('[PROFILE] Confirmation verified, proceeding with deletion');
 
     try {
       setIsDeleting(true);
@@ -418,7 +405,7 @@ export function ProfileScreen() {
         return;
       }
 
-      console.log('[PROFILE] Calling eraseUserDataGDPR with principal:', principal);
+      logger.log('[PROFILE] Calling eraseUserDataGDPR with principal:', principal);
       const userActor = getBikeraUserActor({}, identity);
 
       // Add timeout to prevent hanging
@@ -429,7 +416,7 @@ export function ProfileScreen() {
 
       const res: any = await Promise.race([deletePromise, timeoutPromise]);
 
-      console.log('[PROFILE] eraseUserDataGDPR response:', res);
+      logger.log('[PROFILE] eraseUserDataGDPR response:', res);
 
       if (res && typeof res === 'object' && 'err' in res) {
         console.error('[PROFILE] Delete failed with error:', res.err);
@@ -442,17 +429,17 @@ export function ProfileScreen() {
           error('Error', errorMsg);
         }, 300);
       } else {
-        console.log('[PROFILE] Account deleted successfully');
+        logger.log('[PROFILE] Account deleted successfully');
         setIsDeleting(false);
         setShowDeleteModal(false);
         setDeleteConfirmation('');
 
         // Logout to clear auth state - this will automatically trigger RootNavigator
         // to switch to LandingScreen since isAuthenticated will become false
-        console.log('[PROFILE] Logging out after account deletion');
+        logger.log('[PROFILE] Logging out after account deletion');
         try {
           await logout();
-          console.log('[PROFILE] Logout completed, RootNavigator should switch to LandingScreen');
+          logger.log('[PROFILE] Logout completed, RootNavigator should switch to LandingScreen');
 
           // Show success message after a delay to ensure modal is closed
           setTimeout(() => {
@@ -463,7 +450,7 @@ export function ProfileScreen() {
                 {
                   text: 'OK',
                   onPress: () => {
-                    console.log('[PROFILE] User acknowledged account deletion');
+                    logger.log('[PROFILE] User acknowledged account deletion');
                   },
                 },
               ]
@@ -540,13 +527,9 @@ export function ProfileScreen() {
 
   const formatDistance = (meters: number) => {
     if (meters >= 1000) {
-      return `${(meters / 1000).toFixed(2)} km`;
+      return formatDistanceKmLabel(meters / 1000, 2);
     }
-    return `${meters.toFixed(0)} m`;
-  };
-
-  const formatIMERA = (amount: number) => {
-    return amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${Math.round(meters)} m`;
   };
 
   if (loading) {
@@ -641,11 +624,11 @@ export function ProfileScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 0, gap: 12 }}>
               <LinearGradient colors={[colors.brandPurple, colors.brandViolet]} style={styles.statCard}>
                 <Text style={styles.statLabel}>Total XP</Text>
-                <Text style={styles.statValue}>{formatXp(totalXP)}</Text>
+                <Text style={styles.statValue}>{formatXP(totalXP)}</Text>
               </LinearGradient>
               <LinearGradient colors={[colors.brandBlue300, colors.brandBlue100]} style={styles.statCard}>
                 <Text style={styles.statLabel}>iMERA</Text>
-                <Text style={styles.statValue}>{formatIMERA(totalIMERA)}</Text>
+                <Text style={styles.statValue}>{formatImera(totalIMERA)}</Text>
               </LinearGradient>
               <View style={[styles.statCard, { backgroundColor: colors.surfaceCard, borderWidth: 1, borderColor: colors.borderAccent }]}>
                 <Text style={styles.statLabel}>Distance</Text>
@@ -844,9 +827,9 @@ export function ProfileScreen() {
                   label="Delete Account (GDPR)"
                   isDestructive
                   onPress={() => {
-                    console.log('[PROFILE] Delete Account button pressed');
+                    logger.log('[PROFILE] Delete Account button pressed');
                     setShowDeleteModal(true);
-                    console.log('[PROFILE] showDeleteModal set to true');
+                    logger.log('[PROFILE] showDeleteModal set to true');
                   }}
                 />
               </Card>
@@ -868,6 +851,23 @@ export function ProfileScreen() {
               </Pressable>
             </View>
             <Text style={styles.countryHint}>Optional. Needed to use the Country filter on the leaderboard.</Text>
+            <View style={styles.countrySearchWrap}>
+              <Ionicons name="search" size={16} color={colors.textTertiary} style={{ marginRight: 8 }} />
+              <TextInput
+                value={countrySearch}
+                onChangeText={setCountrySearch}
+                placeholder="Search country or code..."
+                placeholderTextColor={colors.textMuted}
+                style={styles.countrySearchInput}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              {countrySearch.length > 0 ? (
+                <Pressable onPress={() => setCountrySearch('')} hitSlop={6}>
+                  <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+                </Pressable>
+              ) : null}
+            </View>
             <ScrollView style={styles.modalBody}>
               <Pressable
                 onPress={async () => {
@@ -885,7 +885,7 @@ export function ProfileScreen() {
                 <Text style={styles.countryOptionFlag}>🌍</Text>
                 <Text style={styles.countryOptionName}>Not set (world)</Text>
               </Pressable>
-              {COUNTRY_OPTIONS.map((opt) => (
+              {filteredCountryOptions.map((opt: { code: string; name: string }) => (
                 <Pressable
                   key={opt.code}
                   onPress={async () => {
@@ -1039,7 +1039,7 @@ export function ProfileScreen() {
         animationType="slide"
         transparent
         onRequestClose={() => {
-          console.log('[PROFILE] Delete modal onRequestClose called');
+          logger.log('[PROFILE] Delete modal onRequestClose called');
           setShowDeleteModal(false);
         }}
         statusBarTranslucent
@@ -1051,7 +1051,7 @@ export function ProfileScreen() {
           <Pressable
             style={styles.deleteModalBackdrop}
             onPress={() => {
-              console.log('[PROFILE] Delete modal backdrop pressed');
+              logger.log('[PROFILE] Delete modal backdrop pressed');
               setShowDeleteModal(false);
             }}
           >
@@ -1080,7 +1080,7 @@ export function ProfileScreen() {
                       style={styles.formInput}
                       value={deleteConfirmation}
                       onChangeText={(text) => {
-                        console.log('[PROFILE] Delete confirmation text changed:', text);
+                        logger.log('[PROFILE] Delete confirmation text changed:', text);
                         setDeleteConfirmation(text);
                       }}
                       placeholder="DELETE"
@@ -1095,7 +1095,7 @@ export function ProfileScreen() {
                 <Pressable
                   style={styles.modalCancelButton}
                   onPress={() => {
-                    console.log('[PROFILE] Cancel button pressed in delete modal');
+                    logger.log('[PROFILE] Cancel button pressed in delete modal');
                     setShowDeleteModal(false);
                   }}
                 >
@@ -1107,7 +1107,7 @@ export function ProfileScreen() {
                     (deleteConfirmation !== 'DELETE' || isDeleting) && styles.modalDeleteButtonDisabled,
                   ]}
                   onPress={() => {
-                    console.log('[PROFILE] Delete Forever button pressed, confirmation:', deleteConfirmation);
+                    logger.log('[PROFILE] Delete Forever button pressed, confirmation:', deleteConfirmation);
                     handleDeleteAccount();
                   }}
                   disabled={deleteConfirmation !== 'DELETE' || isDeleting}
@@ -1659,6 +1659,23 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 16,
+  },
+  countrySearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  countrySearchInput: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+    padding: 0,
   },
   countryHint: {
     color: colors.textTertiary,

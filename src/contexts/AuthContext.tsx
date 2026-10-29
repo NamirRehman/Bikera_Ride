@@ -11,6 +11,7 @@ import { dataCache } from '../services/dataCache';
 import { appStateManager } from '../services/appStateManager';
 import { startupGate } from '../services/startupGate';
 import { rideAutoStart } from '../services/rideAutoStart';
+import { logger } from '../utils/logger';
 
 // Internet Identity canister ID - use production ID or fallback
 // In React Native, process.env may not be available, so we use a fallback
@@ -44,7 +45,7 @@ class AsyncStorageAdapter {
       const value = await AsyncStorage.getItem(this.prefix + key);
       return value;
     } catch (error) {
-      console.warn('[AUTH] AsyncStorage.get error:', error);
+      logger.warn('[AUTH] AsyncStorage.get error:', error);
       return null;
     }
   }
@@ -54,7 +55,7 @@ class AsyncStorageAdapter {
     try {
       await AsyncStorage.setItem(this.prefix + key, value);
     } catch (error) {
-      console.warn('[AUTH] AsyncStorage.set error:', error);
+      logger.warn('[AUTH] AsyncStorage.set error:', error);
     }
   }
 
@@ -63,7 +64,7 @@ class AsyncStorageAdapter {
     try {
       await AsyncStorage.removeItem(this.prefix + key);
     } catch (error) {
-      console.warn('[AUTH] AsyncStorage.remove error:', error);
+      logger.warn('[AUTH] AsyncStorage.remove error:', error);
     }
   }
 
@@ -93,7 +94,7 @@ const getWebBrowser = () => {
       WebBrowser = require('expo-web-browser');
     }
   } catch (e) {
-    console.warn('expo-web-browser not available:', e);
+    logger.warn('expo-web-browser not available:', e);
     WebBrowser = false; // Mark as attempted
   }
   return WebBrowser;
@@ -234,10 +235,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 const nowNs = BigInt(Date.now()) * BigInt(1_000_000);
                 isValid = expirationNs > nowNs;
                 if (!isValid && __DEV__) {
-                  console.log('[AUTH] Delegation expired');
+                  logger.log('[AUTH] Delegation expired');
                 }
               } catch (expErr) {
-                console.warn('[AUTH] Error checking expiration:', expErr);
+                logger.warn('[AUTH] Error checking expiration:', expErr);
                 // If we can't parse expiration, assume it's valid (better to try than fail)
                 isValid = true;
               }
@@ -247,7 +248,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               setDelegatedIdentity(identity);
               setPrincipal(storedPrincipal);
               if (!silent && __DEV__) {
-                console.log('[AUTH] Restored DelegationIdentity from storage');
+                logger.log('[AUTH] Restored DelegationIdentity from storage');
               }
               
               // Restore profile gate from disk; warm only Home critical cache
@@ -267,15 +268,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (!silent) setCheckingAuth(false);
               return;
             } else {
-              console.log('[AUTH] Delegation expired, clearing storage');
+              logger.log('[AUTH] Delegation expired, clearing storage');
               await AsyncStorage.multiRemove(['bikera_delegation', 'bikera_session_key']);
             }
           } catch (restoreErr) {
-            console.warn('[AUTH] Failed to restore DelegationIdentity:', restoreErr);
+            logger.warn('[AUTH] Failed to restore DelegationIdentity:', restoreErr);
           }
         }
       } catch (storageErr) {
-        console.warn('[AUTH] Failed to check storage for delegation:', storageErr);
+        logger.warn('[AUTH] Failed to check storage for delegation:', storageErr);
       }
       
       // Fallback: Check AuthClient (for web or if delegation not available)
@@ -396,12 +397,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async () => {
     const keepGuest = isGuest;
     setIsLoggingIn(true);
-    console.log('[AUTH] Login started');
+    logger.log('[AUTH] Login started');
     
     // Get or create authClient
     let clientToUse = authClient;
     if (!clientToUse) {
-      console.warn('[AUTH] AuthClient not initialized, attempting to initialize...');
+      logger.warn('[AUTH] AuthClient not initialized, attempting to initialize...');
       try {
         // Create custom storage adapter for React Native
         const storage = new AsyncStorageAdapter();
@@ -414,7 +415,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           keyType: 'Ed25519', // Use Ed25519 instead of WebCrypto keys (no crypto.subtle needed)
         });
         setAuthClient(clientToUse);
-        console.log('[AUTH] AuthClient created successfully');
+        logger.log('[AUTH] AuthClient created successfully');
       } catch (createError) {
         console.error('[AUTH] Failed to create AuthClient:', createError);
         setIsLoggingIn(false);
@@ -432,7 +433,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Always use production Internet Identity for mobile bridge flows
       // (local II can cause mixed-network issues with production canisters)
       const identityProvider = 'https://identity.ic0.app';
-      console.log(`[AUTH] Using Internet Identity: ${identityProvider} (isDevelopment=${isDevelopment})`);
+      logger.log(`[AUTH] Using Internet Identity: ${identityProvider} (isDevelopment=${isDevelopment})`);
       
       // For web, use AuthClient with custom popup window size (small modal)
       // Dynamically get Platform to avoid module load time access
@@ -485,9 +486,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           `&android_package=${encodeURIComponent(androidPackage)}` +
           `&session_key=${encodeURIComponent(JSON.stringify(sessionPublicKeyRaw))}`;
         
-        console.log('[AUTH] Generated session key, opening bridge...');
-        console.log('[AUTH] Bridge URL:', bridgeUrlWithParams.substring(0, 100) + '...');
-        console.log('[AUTH] Redirect URI:', redirectUri);
+        logger.log('[AUTH] Generated session key, opening bridge...');
+        logger.log('[AUTH] Bridge URL:', bridgeUrlWithParams.substring(0, 100) + '...');
+        logger.log('[AUTH] Redirect URI:', redirectUri);
 
         // Keep the real browser session (not incognito) so Internet Identity can
         // reuse the existing passkey / Samsung Pass / Chrome identity instead of
@@ -521,22 +522,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               } catch {}
             }
           } catch (browserErr) {
-            console.warn('[AUTH] Could not pick Custom Tabs browser:', browserErr);
+            logger.warn('[AUTH] Could not pick Custom Tabs browser:', browserErr);
           }
         }
         
-        console.log('[AUTH] Opening WebBrowser session...');
+        logger.log('[AUTH] Opening WebBrowser session...');
         const result = await webBrowser.openAuthSessionAsync(
           bridgeUrlWithParams,
           redirectUri,
           authSessionOptions,
         );
         
-        console.log('[AUTH] WebBrowser session result:', result.type);
+        logger.log('[AUTH] WebBrowser session result:', result.type);
         
         if (result.type === 'success' && result.url) {
-          console.log('[AUTH] Callback received, parsing URL...');
-          console.log('[AUTH] Callback URL:', result.url.substring(0, 150) + '...');
+          logger.log('[AUTH] Callback received, parsing URL...');
+          logger.log('[AUTH] Callback URL:', result.url.substring(0, 150) + '...');
           try {
             const callbackUrl = result.url;
             
@@ -565,19 +566,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             
             if (fragment) {
               try {
-                console.log('[AUTH] Fragment found, length:', fragment.length);
-                console.log('[AUTH] Fragment (first 200 chars):', fragment.substring(0, 200));
+                logger.log('[AUTH] Fragment found, length:', fragment.length);
+                logger.log('[AUTH] Fragment (first 200 chars):', fragment.substring(0, 200));
                 
                 // Parse delegation data from fragment
                 let delegationData: any;
                 try {
                   const decodedFragment = decodeURIComponent(fragment);
-                  console.log('[AUTH] Decoded fragment (first 200 chars):', decodedFragment.substring(0, 200));
+                  logger.log('[AUTH] Decoded fragment (first 200 chars):', decodedFragment.substring(0, 200));
                   delegationData = JSON.parse(decodedFragment);
                 } catch (parseErr) {
                   // Try parsing without decodeURIComponent in case it's already decoded
                   try {
-                    console.log('[AUTH] First parse failed, trying without decodeURIComponent...');
+                    logger.log('[AUTH] First parse failed, trying without decodeURIComponent...');
                     delegationData = JSON.parse(fragment);
                   } catch (parseErr2) {
                     console.error('[AUTH] Both parse attempts failed:', {
@@ -590,12 +591,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   }
                 }
                 
-                console.log('[AUTH] Received delegation from bridge');
-                console.log('[AUTH] Delegation data keys:', Object.keys(delegationData));
-                console.log('[AUTH] Delegation data type:', typeof delegationData);
+                logger.log('[AUTH] Received delegation from bridge');
+                logger.log('[AUTH] Delegation data keys:', Object.keys(delegationData));
+                logger.log('[AUTH] Delegation data type:', typeof delegationData);
                 
                 // Reconstruct DelegationChain and DelegationIdentity
-                console.log('[AUTH] Reconstructing DelegationChain...');
+                logger.log('[AUTH] Reconstructing DelegationChain...');
                 // delegationData.delegationChain is already a parsed object, but fromJSON expects a JSON string
                 // So we need to stringify it again
                 const delegationChainData = delegationData.delegationChain || delegationData;
@@ -617,18 +618,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 // SECURITY: Verify that the delegation chain matches the session key
                 // This prevents using a mismatched delegation chain that would be rejected by IC
                 // but would have already leaked to boundary/replica nodes
-                console.log('[AUTH] Verifying delegation chain matches session key...');
+                logger.log('[AUTH] Verifying delegation chain matches session key...');
                 const sessionPublicKey = sessionKey.getPublicKey();
                 const sessionKeyRaw = new Uint8Array(sessionPublicKey.toRaw());
-                console.log('[AUTH] Session key raw length:', sessionKeyRaw.length, 'bytes');
+                logger.log('[AUTH] Session key raw length:', sessionKeyRaw.length, 'bytes');
                 
                 // Check that the last delegation in the chain targets our session key
                 if (delegationChain.delegations && delegationChain.delegations.length > 0) {
                   const lastDelegation = delegationChain.delegations[delegationChain.delegations.length - 1];
                   const delegatedPublicKey = lastDelegation.delegation.pubkey;
                   
-                  console.log('[AUTH] Delegated public key type:', typeof delegatedPublicKey);
-                  console.log('[AUTH] Delegated public key is Uint8Array:', delegatedPublicKey instanceof Uint8Array);
+                  logger.log('[AUTH] Delegated public key type:', typeof delegatedPublicKey);
+                  logger.log('[AUTH] Delegated public key is Uint8Array:', delegatedPublicKey instanceof Uint8Array);
                   
                   // Extract raw bytes from delegatedPublicKey
                   // The pubkey in delegation chain can be in different formats:
@@ -644,14 +645,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                       if (delegatedPublicKey.length === 32) {
                         // Raw Ed25519 format (32 bytes)
                         delegatedKeyRaw = delegatedPublicKey;
-                        console.log('[AUTH] Using delegated key as raw Ed25519 (32 bytes)');
+                        logger.log('[AUTH] Using delegated key as raw Ed25519 (32 bytes)');
                       } else if (delegatedPublicKey.length > 32) {
                         // Likely DER-encoded format
                         // DER-encoded Ed25519 public key structure:
                         // 0x30 [length] 0x30 0x05 0x06 0x03 0x2b 0x65 0x70 0x03 0x21 0x00 [32 bytes of key]
                         // The last 32 bytes are the raw public key
                         delegatedKeyRaw = delegatedPublicKey.slice(-32);
-                        console.log('[AUTH] Extracted raw key from DER format (last 32 bytes), DER length:', delegatedPublicKey.length, 'raw length:', delegatedKeyRaw.length);
+                        logger.log('[AUTH] Extracted raw key from DER format (last 32 bytes), DER length:', delegatedPublicKey.length, 'raw length:', delegatedKeyRaw.length);
                       } else {
                         throw new Error(`Invalid public key length: expected 32 bytes or DER-encoded (>=32 bytes), got ${delegatedPublicKey.length} bytes`);
                       }
@@ -660,7 +661,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     else if (delegatedPublicKey && typeof (delegatedPublicKey as any).toRaw === 'function') {
                       // Already an Ed25519PublicKey object
                       delegatedKeyRaw = new Uint8Array((delegatedPublicKey as any).toRaw());
-                      console.log('[AUTH] Delegated key is already Ed25519PublicKey, raw length:', delegatedKeyRaw.length);
+                      logger.log('[AUTH] Delegated key is already Ed25519PublicKey, raw length:', delegatedKeyRaw.length);
                     } 
                     // Type guard: Check if it's a string
                     else {
@@ -675,7 +676,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                           );
                           if (hexBytes.length === 32) {
                             delegatedKeyRaw = hexBytes;
-                            console.log('[AUTH] Parsed delegated key from hex string, length:', delegatedKeyRaw.length);
+                            logger.log('[AUTH] Parsed delegated key from hex string, length:', delegatedKeyRaw.length);
                           } else {
                             throw new Error(`Invalid hex string length: expected 64 hex chars (32 bytes), got ${hexStr.length} chars`);
                           }
@@ -724,19 +725,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     throw new Error('Delegation chain does not match session key - potential security issue');
                   }
                   
-                  console.log('[AUTH] ✅ Delegation chain verified - matches session key');
+                  logger.log('[AUTH] ✅ Delegation chain verified - matches session key');
                 } else {
-                  console.warn('[AUTH] ⚠️ Delegation chain has no delegations');
+                  logger.warn('[AUTH] ⚠️ Delegation chain has no delegations');
                 }
                 
-                console.log('[AUTH] Creating DelegationIdentity...');
+                logger.log('[AUTH] Creating DelegationIdentity...');
                 const identity = DelegationIdentity.fromDelegation(sessionKey, delegationChain);
                 
                 const principal = identity.getPrincipal().toText();
-                console.log('[AUTH] Successfully created DelegationIdentity, principal:', principal);
+                logger.log('[AUTH] Successfully created DelegationIdentity, principal:', principal);
                 
                 // Store the delegated identity
-                console.log('[AUTH] Storing identity and principal...');
+                logger.log('[AUTH] Storing identity and principal...');
                 setDelegatedIdentity(identity);
                 setPrincipal(principal);
                 await clearGuestAfterLogin();
@@ -748,20 +749,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   const delegationChainToStore = delegationData.delegationChain || delegationData;
                   await AsyncStorage.setItem('bikera_delegation', JSON.stringify(delegationChainToStore));
                   await AsyncStorage.setItem('bikera_session_key', JSON.stringify(Array.from(sessionKey.getKeyPair().secretKey)));
-                  console.log('[AUTH] Stored delegation data to AsyncStorage');
+                  logger.log('[AUTH] Stored delegation data to AsyncStorage');
                 } catch (storageErr) {
-                  console.warn('[AUTH] Failed to store delegation:', storageErr);
+                  logger.warn('[AUTH] Failed to store delegation:', storageErr);
                 }
                 
-                console.log('[AUTH] Checking auth status...');
+                logger.log('[AUTH] Checking auth status...');
                 await checkAuthStatus();
-                console.log('[AUTH] Login completed successfully');
+                logger.log('[AUTH] Login completed successfully');
               } catch (parseErr: any) {
                 console.error('[AUTH] Failed to parse delegation from fragment:', parseErr);
                 console.error('[AUTH] Parse error details:', parseErr?.message || String(parseErr), parseErr?.stack);
                 // Fallback: Check if principal is in query params (legacy support)
                 if (principalFromBridge) {
-                  console.warn('[AUTH] Using fallback principal (no delegation available)');
+                  logger.warn('[AUTH] Using fallback principal (no delegation available)');
                   setPrincipal(principalFromBridge);
                   try {
                     await AsyncStorage.setItem(STORAGE_PRINCIPAL, principalFromBridge);
@@ -773,10 +774,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 }
               }
             } else {
-              console.warn('[AUTH] No fragment in callback URL');
+              logger.warn('[AUTH] No fragment in callback URL');
               // Fallback: Check query params for principal (legacy support)
               if (principalFromBridge) {
-                console.warn('[AUTH] No delegation in fragment, using principal only (update calls will fail)');
+                logger.warn('[AUTH] No delegation in fragment, using principal only (update calls will fail)');
                 setPrincipal(principalFromBridge);
                 try {
                   await AsyncStorage.setItem(STORAGE_PRINCIPAL, principalFromBridge);
@@ -793,7 +794,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await recoverFromFailedLogin(keepGuest);
           }
         } else if (result.type === 'cancel' || result.type === 'dismiss') {
-          console.log('[AUTH] User cancelled authentication:', result.type);
+          logger.log('[AUTH] User cancelled authentication:', result.type);
           try {
             webBrowser.dismissBrowser?.();
             webBrowser.dismissAuthSession?.();
@@ -866,7 +867,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (authClient) {
         await authClient.logout();
       }
-      console.log('✅ Auth data cleared. Please log in again with local Internet Identity.');
+      logger.log('✅ Auth data cleared. Please log in again with local Internet Identity.');
     } catch (error) {
       console.error('Error clearing auth data:', error);
     }

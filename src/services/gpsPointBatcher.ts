@@ -10,6 +10,7 @@ import { ShadowWorkerService, GPSPoint } from './ShadowWorkerService';
 import { shadowWorkerCircuitBreaker } from './circuitBreaker';
 import { networkMonitor } from './networkMonitor';
 import { appStateManager } from './appStateManager';
+import { logger } from '../utils/logger';
 
 interface BatchedGPSPoint extends GPSPoint {
   userId: string;
@@ -38,6 +39,8 @@ export class GPSPointBatcher {
   private readonly MAX_RETRIES = 3;
   private retryCount: number = 0;
   private networkListener: (() => void) | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly PERSIST_DEBOUNCE_MS = 4000;
 
   constructor(config: Partial<BatchConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -56,13 +59,13 @@ export class GPSPointBatcher {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
           this.queue = parsed;
-          console.log(`[GPSPointBatcher] Loaded ${parsed.length} points from storage`);
+          logger.log(`[GPSPointBatcher] Loaded ${parsed.length} points from storage`);
           // Try to flush on startup if we have points and network is available
           // Use setTimeout to avoid blocking initialization
           setTimeout(() => {
             if (networkMonitor.isConnected()) {
               this.flush().catch((error) => {
-                console.error('[GPSPointBatcher] Failed to flush on startup:', error);
+                logger.error('[GPSPointBatcher] Failed to flush on startup:', error);
               });
             }
           }, 1000);
@@ -70,7 +73,7 @@ export class GPSPointBatcher {
       }
     } catch (error) {
       // AsyncStorage might fail on some platforms - log but don't crash
-      console.warn('[GPSPointBatcher] Failed to load persisted queue (non-critical):', error);
+      logger.warn('[GPSPointBatcher] Failed to load persisted queue (non-critical):', error);
     }
 
     // Listen for network changes (with error handling)
@@ -79,7 +82,7 @@ export class GPSPointBatcher {
         if (networkMonitor.isConnected() && this.queue.length > 0 && appStateManager.isActive()) {
           // Network came back and app is active, try to flush
           this.flush().catch((error) => {
-            console.error('[GPSPointBatcher] Failed to flush on network reconnect:', error);
+            logger.error('[GPSPointBatcher] Failed to flush on network reconnect:', error);
           });
         }
       };
@@ -89,21 +92,25 @@ export class GPSPointBatcher {
       appStateManager.on('foreground', () => {
         if (networkMonitor.isConnected() && this.queue.length > 0) {
           this.flush().catch((error) => {
-            console.error('[GPSPointBatcher] Failed to flush on foreground:', error);
+            logger.error('[GPSPointBatcher] Failed to flush on foreground:', error);
           });
         }
       });
     } catch (error) {
       // Event listeners might fail during initialization - log but don't crash
-      console.warn('[GPSPointBatcher] Failed to setup event listeners (non-critical):', error);
+      logger.warn('[GPSPointBatcher] Failed to setup event listeners (non-critical):', error);
     }
   }
 
   /**
-   * Persist queue to storage
+   * Persist queue to storage (immediate). Prefer schedulePersist for hot path.
    */
   private async persistQueue(): Promise<void> {
     try {
+      if (this.persistTimer) {
+        clearTimeout(this.persistTimer);
+        this.persistTimer = null;
+      }
       // Only persist if queue is not too large
       if (this.queue.length > 0 && this.queue.length <= this.MAX_QUEUE_SIZE) {
         await AsyncStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.queue));
@@ -112,8 +119,19 @@ export class GPSPointBatcher {
         await AsyncStorage.removeItem(this.STORAGE_KEY);
       }
     } catch (error) {
-      console.error('[GPSPointBatcher] Failed to persist queue:', error);
+      logger.error('[GPSPointBatcher] Failed to persist queue:', error);
     }
+  }
+
+  /** Debounced persist — avoids AsyncStorage write on every GPS tick */
+  private schedulePersist(): void {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistQueue().catch((error) => {
+        logger.error('[GPSPointBatcher] Failed to persist queue:', error);
+      });
+    }, this.PERSIST_DEBOUNCE_MS);
   }
 
   /**
@@ -124,16 +142,14 @@ export class GPSPointBatcher {
   async addPoint(userId: string, point: GPSPoint): Promise<void> {
     // Prevent queue from growing too large
     if (this.queue.length >= this.MAX_QUEUE_SIZE) {
-      console.warn(`[GPSPointBatcher] Queue full (${this.MAX_QUEUE_SIZE}), dropping oldest point`);
+      logger.warn(`[GPSPointBatcher] Queue full (${this.MAX_QUEUE_SIZE}), dropping oldest point`);
       this.queue.shift(); // Remove oldest
     }
 
     this.queue.push({ ...point, userId });
 
-    // Persist queue (async, don't await)
-    this.persistQueue().catch((error) => {
-      console.error('[GPSPointBatcher] Failed to persist queue:', error);
-    });
+    // Debounced persist — flush() still writes immediately
+    this.schedulePersist();
 
     // If batch is full, flush immediately (if online)
     if (this.queue.length >= this.config.maxBatchSize) {
@@ -163,7 +179,7 @@ export class GPSPointBatcher {
 
     this.flushTimer = setTimeout(() => {
       this.flush().catch((error) => {
-        console.error('[GPSPointBatcher] Scheduled flush failed:', error);
+        logger.error('[GPSPointBatcher] Scheduled flush failed:', error);
       });
     }, this.config.maxWaitTime);
   }
@@ -181,14 +197,14 @@ export class GPSPointBatcher {
 
     // Check network connectivity
     if (!networkMonitor.isConnected()) {
-      console.log('[GPSPointBatcher] Offline, queueing points for later');
+      logger.log('[GPSPointBatcher] Offline, queueing points for later');
       await this.persistQueue();
       return;
     }
 
     // Check circuit breaker
     if (shadowWorkerCircuitBreaker.getState() === 'OPEN') {
-      console.warn('[GPSPointBatcher] Circuit breaker is OPEN, queueing points');
+      logger.warn('[GPSPointBatcher] Circuit breaker is OPEN, queueing points');
       await this.persistQueue();
       return;
     }
@@ -221,7 +237,7 @@ export class GPSPointBatcher {
       })
       .catch(async (error) => {
         // Failure - put points back in queue for retry
-        console.error('[GPSPointBatcher] Flush failed, re-queueing points:', error);
+        logger.error('[GPSPointBatcher] Flush failed, re-queueing points:', error);
         this.queue = [...pointsToSend, ...this.queue];
         // Limit queue size
         if (this.queue.length > this.MAX_QUEUE_SIZE) {
@@ -253,7 +269,7 @@ export class GPSPointBatcher {
         return; // Success
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        console.warn(`[GPSPointBatcher] Attempt ${attempt + 1}/${this.MAX_RETRIES} failed:`, error);
+        logger.warn(`[GPSPointBatcher] Attempt ${attempt + 1}/${this.MAX_RETRIES} failed:`, error);
 
         // Wait before retry (exponential backoff)
         if (attempt < this.MAX_RETRIES - 1) {
@@ -293,7 +309,7 @@ export class GPSPointBatcher {
         
         // Send chunk (fire and forget for performance)
         const sendPromise = this.sendChunk(userId, chunk).catch((error) => {
-          console.error(`[GPSPointBatcher] Failed to send batch for user ${userId}:`, error);
+          logger.error(`[GPSPointBatcher] Failed to send batch for user ${userId}:`, error);
           // Don't throw - allow other batches to continue
         });
 
@@ -315,11 +331,11 @@ export class GPSPointBatcher {
       await ShadowWorkerService.sendGPSPointsBatch(userId, points);
     } catch (error) {
       // If batch fails, fallback to individual sends
-      console.warn(`[GPSPointBatcher] Batch send failed, falling back to individual sends:`, error);
+      logger.warn(`[GPSPointBatcher] Batch send failed, falling back to individual sends:`, error);
       const sendPromises = points.map((point) =>
         ShadowWorkerService.sendGPSPoint(userId, point).catch((error) => {
           // Log but don't throw - individual point failures shouldn't block others
-          console.warn(`[GPSPointBatcher] Failed to send point:`, error);
+          logger.warn(`[GPSPointBatcher] Failed to send point:`, error);
           return null;
         })
       );
@@ -364,7 +380,7 @@ export class GPSPointBatcher {
     try {
       await AsyncStorage.removeItem(this.STORAGE_KEY);
     } catch (error) {
-      console.error('[GPSPointBatcher] Failed to clear storage:', error);
+      logger.error('[GPSPointBatcher] Failed to clear storage:', error);
     }
   }
 

@@ -7,6 +7,7 @@
 interface PendingRequest<T> {
   promise: Promise<T>;
   timestamp: number;
+  ttl: number;
 }
 
 class RequestDeduplicator {
@@ -28,7 +29,7 @@ class RequestDeduplicator {
     const existing = this.pendingRequests.get(key);
     if (existing) {
       const age = Date.now() - existing.timestamp;
-      if (age < ttl) {
+      if (age < existing.ttl) {
         return existing.promise;
       }
       this.pendingRequests.delete(key);
@@ -54,6 +55,7 @@ class RequestDeduplicator {
     this.pendingRequests.set(key, {
       promise,
       timestamp: Date.now(),
+      ttl,
     });
 
     return promise;
@@ -62,7 +64,7 @@ class RequestDeduplicator {
   isPending(key: string): boolean {
     const existing = this.pendingRequests.get(key);
     if (!existing) return false;
-    return Date.now() - existing.timestamp < this.REQUEST_TIMEOUT;
+    return Date.now() - existing.timestamp < existing.ttl;
   }
 
   cancel(key: string): void {
@@ -76,7 +78,7 @@ class RequestDeduplicator {
   private cleanup(): void {
     const now = Date.now();
     for (const [key, request] of this.pendingRequests.entries()) {
-      if (now - request.timestamp >= this.REQUEST_TIMEOUT) {
+      if (now - request.timestamp >= request.ttl) {
         this.pendingRequests.delete(key);
       }
     }

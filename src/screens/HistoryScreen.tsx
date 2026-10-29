@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { startTransition, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Pressable, Text, View, StyleSheet, ScrollView, FlatList, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,13 +11,16 @@ import { Card } from '../components/Card';
 import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
-import { getBikeraValidatorActor, getBikeraXpActor, getBikeraRewardsActor } from '../utils/actors';
+import { getBikeraValidatorActor } from '../utils/actors';
+import { fetchRideMatchRows } from '../services/rideMatch';
 import { useCachedData } from '../hooks/useCachedData';
 import { LoadingBlock } from '../components/LoadingBlock';
+import { ListSkeleton } from '../components/ListSkeleton';
+import { yieldToMain } from '../utils/yieldToMain';
 import { GuestBanner } from '../components/GuestBanner';
 import { useToastHelpers } from '../contexts/ToastContext';
-import { AnimatedListItem, listItemEntering, PressableScale } from '../components/motion';
-import { formatXp } from '../utils/format';
+import { PressableScale } from '../components/motion';
+import { formatDistanceKm, formatImera, formatXP } from '../utils/formatStats';
 
 interface RideHistory {
   id: string;
@@ -39,19 +42,72 @@ const HISTORY_PAGE_SIZE = 20;
 const MIN_XP_TRANSACTIONS = 80;
 const MIN_REWARDS = 80;
 
+type TimedAmount = { time: number; amount: number; distance?: number };
+
+function lowerBound(items: TimedAmount[], target: number): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (items[mid].time < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function sumWindow(
+  items: TimedAmount[],
+  start: number,
+  end: number,
+  accept?: (item: TimedAmount) => boolean
+): number {
+  let sum = 0;
+  for (let i = lowerBound(items, start); i < items.length; i += 1) {
+    const item = items[i];
+    if (item.time > end) break;
+    if (!accept || accept(item)) sum += item.amount;
+  }
+  return sum;
+}
+
+function mapRoute(r: any, xpEarned = 0, imeraEarned = 0): RideHistory {
+  const createdAt = Number(r.createdAt || 0n) / 1_000_000;
+  const distance = Number(r.totalDistance || 0n);
+  const avgSpeed = Number(r.avgSpeed || 0n);
+  const calculatedXP = distance > 0 ? Math.floor(distance / 1000) : 0;
+  let routeType: 'bike' | 'walk' | 'run' = 'bike';
+  if (avgSpeed < 5) routeType = 'walk';
+  else if (avgSpeed < 15) routeType = 'run';
+
+  return {
+    id: String(r.routeId || ''),
+    date: new Date(createdAt).toISOString(),
+    distance: distance / 1000,
+    duration: Number(r.duration || 0n),
+    avgSpeed,
+    maxSpeed: Number(r.maxSpeed || 0n),
+    xpEarned: xpEarned > 0 ? xpEarned : calculatedXP,
+    imeraEarned,
+    routeType,
+  };
+}
+
 export function HistoryScreen() {
   const navigation = useNavigation<any>();
   const { principal, isGuest } = useAuth();
   const { error } = useToastHelpers();
-  const [rides, setRides] = useState<RideHistory[]>([]);
+  const [previewRides, setPreviewRides] = useState<RideHistory[]>([]);
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('year');
-  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
-  const [hasMore, setHasMore] = useState(true);
+  const publishRides = useRef<(rides: RideHistory[]) => void>(() => {});
+  const historyGen = useRef(0);
+  publishRides.current = (next) => {
+    startTransition(() => setPreviewRides(next));
+  };
 
-  const fetchHistoryData = useCallback(async () => {
+  const fetchHistoryData = useCallback(async (): Promise<RideHistory[]> => {
     try {
       const pText = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
       if (!pText) {
@@ -60,87 +116,51 @@ export function HistoryScreen() {
       const p = Principal.fromText(pText);
 
       // Fetch route history and related data with limits (unbounded [] was very slow)
+      const gen = ++historyGen.current;
       const validatorActor: any = getBikeraValidatorActor();
       const routeLimit = historyLimit;
       const xpLimit = Math.max(MIN_XP_TRANSACTIONS, historyLimit * 3);
       const rewardsLimit = Math.max(MIN_REWARDS, historyLimit * 3);
-      const [routeHistory, xpTransactions, allRewards] = await Promise.all([
-        validatorActor.getUserRouteHistory(p, [BigInt(routeLimit)]),
-        getBikeraXpActor().getXPTransactions(p, [BigInt(xpLimit)]),
-        getBikeraRewardsActor().getUserRewards(p, [BigInt(rewardsLimit)]),
-      ]);
 
-      const validRoutes = (routeHistory || []).filter((r: any) => {
-        const isValid = r.isValid === true || r.isValid === 1;
-        return isValid;
-      });
+      // Summaries omit GPS points. Fall back until the validator upgrade is deployed.
+      let routeHistory: any[];
+      try {
+        routeHistory = await validatorActor.getUserRouteSummaries(p, [BigInt(routeLimit)]);
+      } catch (summaryErr) {
+        if (__DEV__) console.warn('[HISTORY] Route summary unavailable, loading full routes:', summaryErr);
+        routeHistory = await validatorActor.getUserRouteHistory(p, [BigInt(routeLimit)]);
+      }
+      const validRoutes = (routeHistory || [])
+        .filter((r: any) => r.isValid === true || r.isValid === 1)
+        .sort((a: any, b: any) => Number(b.createdAt || 0n) - Number(a.createdAt || 0n));
 
-      // Map routes with accurate XP and iMERA calculations
-      const mapped: RideHistory[] = validRoutes.map((r: any) => {
-        const routeId = String(r.routeId || '');
+      const estimated = validRoutes.map((r: any) => mapRoute(r));
+      if (historyGen.current === gen) publishRides.current(estimated);
+      await yieldToMain();
+
+      let xpEvents: TimedAmount[] = [];
+      let rewardEvents: TimedAmount[] = [];
+      try {
+        const matched = await fetchRideMatchRows(p, xpLimit, rewardsLimit);
+        xpEvents = matched.xp.sort((a, b) => a.time - b.time);
+        rewardEvents = matched.rewards.sort((a, b) => a.time - b.time);
+      } catch (matchErr) {
+        console.error('Failed to match ride rewards:', matchErr);
+        return estimated;
+      }
+
+      return validRoutes.map((r: any) => {
         const createdAt = Number(r.createdAt || 0n) / 1_000_000;
         const distance = Number(r.totalDistance || 0n);
-        const duration = Number(r.duration || 0n);
-        const avgSpeed = Number(r.avgSpeed || 0n);
-        const maxSpeed = Number(r.maxSpeed || 0n);
-
-        const routeTime = createdAt;
-        const routeStartWindow = routeTime - (5 * 60 * 1000);
-        const routeEndWindow = routeTime + (5 * 60 * 1000);
-
-        // Find matching XP transactions
-        const matchingXPTransactions = (xpTransactions || []).filter((tx: any) => {
-          const txTime = Number(tx.timestamp || 0n) / 1_000_000;
-          if (txTime < routeStartWindow || txTime > routeEndWindow) return false;
-          if (tx.reason && typeof tx.reason === 'object' && 'Distance' in tx.reason) {
-            const txDistance = Number(tx.reason.Distance || 0n);
-            return Math.abs(txDistance - distance) <= (distance * 0.1);
-          }
-          return false;
+        const start = createdAt - 5 * 60 * 1000;
+        const end = createdAt + 5 * 60 * 1000;
+        const xpEarned = sumWindow(xpEvents, start, end, (tx) => {
+          if (tx.distance == null) return false;
+          return Math.abs(tx.distance - distance) <= distance * 0.1;
         });
-
-        const xpEarned = matchingXPTransactions.reduce((sum: number, tx: any) => {
-          return sum + Number(tx.amount || 0n);
-        }, 0);
-
-        const calculatedXP = distance > 0 ? Math.floor(distance / 1000) : 0;
-        const finalXP = xpEarned > 0 ? xpEarned : calculatedXP;
-
-        // Find matching iMERA rewards
-        const matchingRewards = (allRewards || []).filter((reward: any) => {
-          const rewardTime = Number(reward.timestamp || 0n) / 1_000_000;
-          return rewardTime >= routeStartWindow && rewardTime <= (routeEndWindow + 5 * 60 * 1000);
-        });
-
-        const imeraEarned = matchingRewards.reduce((sum: number, reward: any) => {
-          return sum + (Number(reward.amount || 0n) / 100000000);
-        }, 0);
-
-        // Determine route type based on average speed
-        let routeType: 'bike' | 'walk' | 'run' = 'bike';
-        if (avgSpeed < 5) {
-          routeType = 'walk';
-        } else if (avgSpeed >= 5 && avgSpeed < 15) {
-          routeType = 'run';
-        }
-
-        return {
-          id: routeId,
-          date: new Date(createdAt).toISOString(),
-          distance: distance / 1000,
-          duration: duration,
-          avgSpeed: avgSpeed,
-          maxSpeed: maxSpeed,
-          xpEarned: finalXP,
-          imeraEarned: imeraEarned,
-          routeType: routeType,
-        };
+        const imeraEarned = sumWindow(rewardEvents, start, end + 5 * 60 * 1000);
+        return mapRoute(r, xpEarned, imeraEarned);
       });
-
-      // Sort by date (newest first)
-      mapped.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-      return mapped;
     } catch (e) {
       console.error('Failed to fetch history:', e);
       error('History Error', 'Failed to load your ride history.');
@@ -158,34 +178,22 @@ export function HistoryScreen() {
     minRefetchIntervalMs: 90_000,
   });
 
-  // Apply activity type filter to cached data
-  useEffect(() => {
-    if (historyData) {
-      const now = Date.now();
-      const timeFilterMs = {
-        week: 7 * 24 * 60 * 60 * 1000,
-        month: 30 * 24 * 60 * 60 * 1000,
-        year: 365 * 24 * 60 * 60 * 1000,
-      }[timeFilter] || Infinity;
-      const timeFiltered = historyData.filter((r) => now - new Date(r.date).getTime() <= timeFilterMs);
-      const filtered = filter === 'all'
-        ? timeFiltered
-        : timeFiltered.filter(r => r.routeType === filter);
-      setRides(filtered);
-      setHasMore(historyData.length >= historyLimit);
-      setLoading(false);
-    } else if (!historyLoading) {
-      setLoading(false);
-    }
-  }, [historyData, historyLoading, filter, timeFilter, historyLimit]);
+  const rides = useMemo((): RideHistory[] => {
+    const source: RideHistory[] = historyData ?? previewRides;
+    const now = Date.now();
+    const timeFilterMs = {
+      week: 7 * 24 * 60 * 60 * 1000,
+      month: 30 * 24 * 60 * 60 * 1000,
+      year: 365 * 24 * 60 * 60 * 1000,
+    }[timeFilter] || Infinity;
+    const timeFiltered = source.filter((ride) => now - new Date(ride.date).getTime() <= timeFilterMs);
+    return filter === 'all' ? timeFiltered : timeFiltered.filter((ride) => ride.routeType === filter);
+  }, [historyData, previewRides, filter, timeFilter]);
 
-  useEffect(() => {
-    setLoading(historyLoading);
-  }, [historyLoading]);
+  const hasMore = (historyData ?? previewRides).length >= historyLimit;
 
   useEffect(() => {
     setHistoryLimit(HISTORY_PAGE_SIZE);
-    setHasMore(true);
   }, [timeFilter, principal]);
 
   const onRefresh = useCallback(async () => {
@@ -246,57 +254,62 @@ export function HistoryScreen() {
     }
   };
 
-  const totalStats = rides.reduce((acc, ride) => ({
-    distance: acc.distance + ride.distance,
-    xp: acc.xp + ride.xpEarned,
-    imera: acc.imera + ride.imeraEarned,
-  }), { distance: 0, xp: 0, imera: 0 });
+  const totalStats = useMemo(
+    () =>
+      rides.reduce(
+        (acc: { distance: number; xp: number; imera: number }, ride: RideHistory) => ({
+          distance: acc.distance + ride.distance,
+          xp: acc.xp + ride.xpEarned,
+          imera: acc.imera + ride.imeraEarned,
+        }),
+        { distance: 0, xp: 0, imera: 0 }
+      ),
+    [rides]
+  );
 
-  const isInitialLoading = loading && rides.length === 0;
+  const isInitialLoading = historyLoading && rides.length === 0;
 
-  const renderRideItem = useCallback(({ item, index }: { item: RideHistory; index: number }) => (
-    <AnimatedListItem entering={listItemEntering(index)}>
-      <Card style={styles.rideCard}>
-        <View style={styles.rideHeader}>
-          <View style={styles.rideHeaderLeft}>
-            <View style={[styles.routeIconContainer, { backgroundColor: getRouteColor(item.routeType)[0] + '20' }]}>
-              <Text style={styles.routeIcon}>{getRouteIcon(item.routeType)}</Text>
-            </View>
-            <View>
-              <Text style={styles.rideType}>{item.routeType.charAt(0).toUpperCase() + item.routeType.slice(1)} Ride</Text>
-              <Text style={styles.rideDate}>{formatDate(item.date)}</Text>
-            </View>
+  const renderRideItem = useCallback(({ item }: { item: RideHistory }) => (
+    <Card style={styles.rideCard}>
+      <View style={styles.rideHeader}>
+        <View style={styles.rideHeaderLeft}>
+          <View style={[styles.routeIconContainer, { backgroundColor: getRouteColor(item.routeType)[0] + '20' }]}>
+            <Text style={styles.routeIcon}>{getRouteIcon(item.routeType)}</Text>
           </View>
-          <View style={styles.rideRewards}>
-            <Text style={styles.xpText}>+{item.xpEarned} XP</Text>
-            <Text style={styles.rewardSeparator}>•</Text>
-            <Text style={styles.imeraText}>+{item.imeraEarned.toFixed(1)} iMERA</Text>
+          <View>
+            <Text style={styles.rideType}>{item.routeType.charAt(0).toUpperCase() + item.routeType.slice(1)} Ride</Text>
+            <Text style={styles.rideDate}>{formatDate(item.date)}</Text>
           </View>
         </View>
-
-        <View style={styles.statsGrid}>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Distance</Text>
-            <Text style={styles.statValue}>{item.distance.toFixed(1)} km</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Duration</Text>
-            <Text style={styles.statValue}>{formatDuration(item.duration)}</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Avg Speed</Text>
-            <Text style={styles.statValue}>{item.avgSpeed.toFixed(1)} km/h</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Max Speed</Text>
-            <Text style={styles.statValue}>{item.maxSpeed.toFixed(1)} km/h</Text>
-          </View>
+        <View style={styles.rideRewards}>
+          <Text style={styles.xpText}>+{formatXP(item.xpEarned)} XP</Text>
+          <Text style={styles.rewardSeparator}>•</Text>
+          <Text style={styles.imeraText}>+{formatImera(item.imeraEarned)} iMERA</Text>
         </View>
-      </Card>
-    </AnimatedListItem>
+      </View>
+
+      <View style={styles.statsGrid}>
+        <View style={styles.statItem}>
+          <Text style={styles.statLabel}>Distance</Text>
+          <Text style={styles.statValue}>{formatDistanceKm(item.distance)} km</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statLabel}>Duration</Text>
+          <Text style={styles.statValue}>{formatDuration(item.duration)}</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statLabel}>Avg Speed</Text>
+          <Text style={styles.statValue}>{item.avgSpeed.toFixed(1)} km/h</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statLabel}>Max Speed</Text>
+          <Text style={styles.statValue}>{item.maxSpeed.toFixed(1)} km/h</Text>
+        </View>
+      </View>
+    </Card>
   ), [getRouteColor, getRouteIcon, formatDate, formatDuration]);
 
-  const listHeader = (
+  const listHeader = useMemo(() => (
     <View style={styles.listHeader}>
       <SectionHeader title="Ride History" subtitle="Track your progress and achievements" />
       <GuestBanner compact message="Guest rides stay on this device and are not listed here until you sign in." />
@@ -307,10 +320,11 @@ export function HistoryScreen() {
             colors={[colors.brandPurple + '1A', colors.brandViolet + '1A']}
             style={styles.summaryGradient}
           >
-            <Text style={styles.summaryLabel}>Total Distance</Text>
-            <Text style={styles.summaryValue}>
-              {totalStats.distance.toFixed(1)} <Text style={styles.summaryUnit}>km</Text>
+            <Text style={styles.summaryLabel} numberOfLines={1}>Distance</Text>
+            <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
+              {formatDistanceKm(totalStats.distance)}
             </Text>
+            <Text style={styles.summaryUnit}>km</Text>
           </LinearGradient>
         </Card>
         <Card style={styles.summaryCard}>
@@ -318,10 +332,11 @@ export function HistoryScreen() {
             colors={['#34d3991A', '#10b9811A']}
             style={styles.summaryGradient}
           >
-            <Text style={styles.summaryLabel}>Total XP</Text>
-            <Text style={styles.summaryValue}>
-              {formatXp(totalStats.xp)} <Text style={styles.summaryUnit}>XP</Text>
+            <Text style={styles.summaryLabel} numberOfLines={1}>XP</Text>
+            <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
+              {formatXP(totalStats.xp)}
             </Text>
+            <Text style={styles.summaryUnit}>XP</Text>
           </LinearGradient>
         </Card>
         <Card style={styles.summaryCard}>
@@ -329,10 +344,11 @@ export function HistoryScreen() {
             colors={['#fbbf241A', '#f59e0b1A']}
             style={styles.summaryGradient}
           >
-            <Text style={styles.summaryLabel}>Total iMERA</Text>
-            <Text style={styles.summaryValue}>
-              {totalStats.imera.toFixed(1)} <Text style={styles.summaryUnit}>iMERA</Text>
+            <Text style={styles.summaryLabel} numberOfLines={1}>iMERA</Text>
+            <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
+              {formatImera(totalStats.imera)}
             </Text>
+            <Text style={styles.summaryUnit}>iMERA</Text>
           </LinearGradient>
         </Card>
       </View>
@@ -392,29 +408,32 @@ export function HistoryScreen() {
         </ScrollView>
       </View>
     </View>
-  );
+  ), [totalStats, filter, timeFilter]);
 
-  const listFooter = (
-    <View style={styles.listFooter}>
-      {historyLoading && rides.length > 0 ? (
-        <LoadingBlock message="Loading more…" color={colors.brandPurple} />
-      ) : hasMore ? (
-        <Pressable
-          style={({ pressed }) => [styles.loadMoreButton, pressed && { opacity: 0.9 }]}
-          onPress={handleLoadMore}
-          accessibilityLabel="Load more rides"
-          accessibilityRole="button"
-        >
-          <Text style={styles.loadMoreText}>Load more rides</Text>
-        </Pressable>
-      ) : (
-        <View style={styles.footerSpacer} />
-      )}
-    </View>
+  const listFooter = useMemo(
+    () => (
+      <View style={styles.listFooter}>
+        {historyLoading && rides.length > 0 ? (
+          <LoadingBlock message="Loading more…" color={colors.brandPurple} />
+        ) : hasMore ? (
+          <Pressable
+            style={({ pressed }) => [styles.loadMoreButton, pressed && { opacity: 0.9 }]}
+            onPress={handleLoadMore}
+            accessibilityLabel="Load more rides"
+            accessibilityRole="button"
+          >
+            <Text style={styles.loadMoreText}>Load more rides</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.footerSpacer} />
+        )}
+      </View>
+    ),
+    [historyLoading, rides.length, hasMore, handleLoadMore]
   );
 
   return (
-    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen scroll={false} animate={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
       <FlatList
         data={rides}
         keyExtractor={(item) => item.id}
@@ -423,7 +442,7 @@ export function HistoryScreen() {
         ListFooterComponent={listFooter}
         ListEmptyComponent={
           isInitialLoading ? (
-            <LoadingBlock message="Loading…" color={colors.brandPurple} />
+            <ListSkeleton rows={4} />
           ) : (
             <View style={styles.emptyContainer}>
               <Ionicons name="bicycle-outline" size={48} color={colors.textTertiary} style={styles.emptyIcon} />
@@ -449,9 +468,10 @@ export function HistoryScreen() {
         onEndReached={hasMore ? handleLoadMore : undefined}
         onEndReachedThreshold={0.5}
         initialNumToRender={HISTORY_PAGE_SIZE}
-        maxToRenderPerBatch={6}
-        windowSize={5}
-        removeClippedSubviews={Platform.OS === 'android' || Platform.OS === 'ios'}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews
       />
     </Screen>
   );
@@ -485,17 +505,18 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     color: colors.textSecondary,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     marginBottom: 4,
   },
   summaryValue: {
     color: colors.textPrimary,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
   },
   summaryUnit: {
-    fontSize: 14,
+    marginTop: 2,
+    fontSize: 12,
     color: colors.textTertiary,
     fontWeight: '600',
   },

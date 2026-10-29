@@ -1,96 +1,115 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Toast, ToastType } from '../components/Toast';
 
 interface ToastData {
-    id: string;
-    type: ToastType;
-    title: string;
-    message?: string;
-    duration?: number;
+  id: string;
+  type: ToastType;
+  title: string;
+  message?: string;
+  duration?: number;
 }
 
 interface ToastContextType {
-    showToast: (toast: Omit<ToastData, 'id'>) => void;
-    hideToast: (id: string) => void;
+  showToast: (toast: Omit<ToastData, 'id'>) => void;
+  hideToast: (id: string) => void;
 }
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export const useToast = () => {
-    const context = useContext(ToastContext);
-    if (!context) {
-        throw new Error('useToast must be used within a ToastProvider');
-    }
-    return context;
+  const context = useContext(ToastContext);
+  if (!context) {
+    throw new Error('useToast must be used within a ToastProvider');
+  }
+  return context;
 };
 
 interface ToastProviderProps {
-    children: ReactNode;
+  children: ReactNode;
 }
 
 export const ToastProvider: React.FC<ToastProviderProps> = ({ children }) => {
-    const [toasts, setToasts] = useState<ToastData[]>([]);
-    const insets = useSafeAreaInsets();
+  const [toasts, setToasts] = useState<ToastData[]>([]);
+  const insets = useSafeAreaInsets();
 
-    const showToast = useCallback((toast: Omit<ToastData, 'id'>) => {
-        const id = Math.random().toString(36).substring(7);
-        const newToast = { ...toast, id };
+  const hideToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }, []);
 
-        setToasts((prev) => [...prev, newToast]);
+  const showToast = useCallback(
+    (toast: Omit<ToastData, 'id'>) => {
+      const id = Math.random().toString(36).substring(7);
+      const newToast = { ...toast, id };
 
-        // Auto dismiss after duration (default 5s)
-        if (toast.duration !== 0) {
-            setTimeout(() => {
-                hideToast(id);
-            }, toast.duration || 5000);
-        }
-    }, []);
+      setToasts((prev) => [...prev, newToast]);
 
-    const hideToast = useCallback((id: string) => {
-        setToasts((prev) => prev.filter((toast) => toast.id !== id));
-    }, []);
+      if (toast.duration !== 0) {
+        setTimeout(() => {
+          hideToast(id);
+        }, toast.duration || 5000);
+      }
+    },
+    [hideToast]
+  );
 
-    return (
-        <ToastContext.Provider value={{ showToast, hideToast }}>
-            {children}
+  const value = useMemo(
+    () => ({ showToast, hideToast }),
+    [showToast, hideToast]
+  );
 
-            {/* Toast Container - absolute position over content */}
-            <View style={[styles.container, { top: insets.top + 10 }]}>
-                {toasts.map((toast) => (
-                    <Toast
-                        key={toast.id}
-                        id={toast.id}
-                        type={toast.type}
-                        title={toast.title}
-                        message={toast.message}
-                        onDismiss={hideToast}
-                    />
-                ))}
-            </View>
-        </ToastContext.Provider>
-    );
+  return (
+    <ToastContext.Provider value={value}>
+      {children}
+
+      <View style={[styles.container, { top: insets.top + 10 }]} pointerEvents="box-none">
+        {toasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            id={toast.id}
+            type={toast.type}
+            title={toast.title}
+            message={toast.message}
+            onDismiss={hideToast}
+          />
+        ))}
+      </View>
+    </ToastContext.Provider>
+  );
 };
 
-// Helper hooks for common toast types
 export const useToastHelpers = () => {
-    const { showToast } = useToast();
+  const { showToast } = useToast();
 
-    return {
-        success: (title: string, message?: string) => showToast({ type: 'success', title, message }),
-        error: (title: string, message?: string) => showToast({ type: 'error', title, message }),
-        warning: (title: string, message?: string) => showToast({ type: 'warning', title, message }),
-        info: (title: string, message?: string) => showToast({ type: 'info', title, message }),
-    };
+  return useMemo(
+    () => ({
+      success: (title: string, message?: string) =>
+        showToast({ type: 'success', title, message }),
+      error: (title: string, message?: string) =>
+        showToast({ type: 'error', title, message }),
+      warning: (title: string, message?: string) =>
+        showToast({ type: 'warning', title, message }),
+      info: (title: string, message?: string) =>
+        showToast({ type: 'info', title, message }),
+    }),
+    [showToast]
+  );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        zIndex: 9999, // Ensure it sits above everything
-        alignItems: 'center',
-    },
+  container: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 9999,
+    alignItems: 'center',
+  },
 });

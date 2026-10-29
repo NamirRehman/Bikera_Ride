@@ -152,26 +152,25 @@ type FocusRevealProps = {
   style?: StyleProp<ViewStyle>;
 };
 
-/** Soft fade when a tab screen gains focus — only if not already painted. */
+/**
+ * One-shot enter fade on first focus only.
+ * Re-focus animations on every tab switch feel glitchy and cost frames.
+ */
 export function FocusReveal({ children, style }: FocusRevealProps) {
   const isFocused = useIsFocused();
+  const didReveal = useSharedValue(0);
   const progress = useSharedValue(1);
-  const mountedFlag = useSharedValue(0);
 
   useEffect(() => {
-    if (!isFocused) return;
-    if (mountedFlag.value === 0) {
-      mountedFlag.value = 1;
-      progress.value = 1;
-      return;
-    }
-    progress.value = 0.94;
-    progress.value = withTiming(1, { duration: 180, easing: ENTER_EASING });
-  }, [isFocused, progress, mountedFlag]);
+    if (!isFocused || didReveal.value === 1) return;
+    didReveal.value = 1;
+    progress.value = 0.96;
+    progress.value = withTiming(1, { duration: 160, easing: ENTER_EASING });
+  }, [isFocused, progress, didReveal]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
-    transform: [{ translateY: interpolate(progress.value, [0.94, 1], [4, 0]) }],
+    transform: [{ translateY: interpolate(progress.value, [0.96, 1], [3, 0]) }],
   }));
 
   return (

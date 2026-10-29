@@ -18,11 +18,16 @@ import {
 import { invalidateAfterRide } from '../utils/cacheHelpers';
 import { ShadowWorkerService } from '../services/ShadowWorkerService';
 import { getGPSPointBatcher } from '../services/gpsPointBatcher';
+import { submitSessionToJoinedPools } from '../services/poolRideSubmit';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { rideAutoStart } from '../services/rideAutoStart';
 import { rideFromPoints, saveLocalRide, type RidePoint } from '../services/rideFiles';
 
 const { width } = Dimensions.get('window');
+
+const STATS_GRADIENT = ['rgba(6, 7, 23, 0.9)', 'rgba(6, 7, 23, 0.98)'] as const;
+const CTA_GRADIENT = [colors.brandBlue100, colors.brandPurple] as const;
+const SUCCESS_CTA_GRADIENT = [colors.success, colors.brandBlue100] as const;
 
 interface SessionData {
   distance: number; // in km
@@ -33,7 +38,7 @@ interface SessionData {
 }
 
 // Mock Map Component (can be replaced with react-native-maps later)
-function MapPlaceholder() {
+const MapPlaceholder = React.memo(function MapPlaceholder() {
   return (
     <View style={styles.mapContainer}>
       {/* Simulating dark mode map with grid lines */}
@@ -55,7 +60,7 @@ function MapPlaceholder() {
       </View>
     </View>
   );
-}
+});
 
 export function TrackScreen() {
   const { principal, isGuest, getIdentity } = useAuth();
@@ -69,7 +74,8 @@ export function TrackScreen() {
   const [savedSessionData, setSavedSessionData] = useState<SessionData | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
-  const [currentPos, setCurrentPos] = useState<Location.LocationObject | null>(null);
+  /** Boolean only — full LocationObject in ref to avoid re-render every GPS tick */
+  const [hasGpsFix, setHasGpsFix] = useState(false);
   const [autoStartOnLaunch, setAutoStartOnLaunch] = useState(false);
   const [autoStartHydrated, setAutoStartHydrated] = useState(false);
   const [session, setSession] = useState<SessionData>({
@@ -123,9 +129,12 @@ export function TrackScreen() {
   const firstFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendInFlightRef = useRef<boolean>(false);
   const lastActivityPingRef = useRef<number>(0);
+  const hasGpsFixRef = useRef(false);
+  const currentPosRef = useRef<Location.LocationObject | null>(null);
 
   const FIRST_FLUSH_DELAY_MS = 150000; // 2.5 minutes (150 seconds) - same as web
   const CACHE_MAX_POINTS = 800; // Same as web
+  const GPS_ACCURACY = Location.Accuracy.High;
 
   const addLog = useCallback((level: 'info' | 'debug' | 'warn' | 'error', message: string, data?: any) => {
     if (!__DEV__) return;
@@ -138,7 +147,7 @@ export function TrackScreen() {
   }, []);
 
   // Haversine formula to calculate distance between two points
-  const haversine = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const haversine = useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371e3; // Earth's radius in meters
     const toRad = (d: number) => (d * Math.PI) / 180;
     const dLat = toRad(lat2 - lat1);
@@ -148,7 +157,7 @@ export function TrackScreen() {
       Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c; // in meters
-  };
+  }, []);
 
   // Check location permissions
   useEffect(() => {
@@ -201,28 +210,29 @@ export function TrackScreen() {
     sessionRef.current = session;
   }, [session]);
 
-  // Duration timer - updates every second
+  // Single UI tick (~1Hz): pulls live metrics from sessionRef so GPS handler avoids setState
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
     if (isTracking && !isPaused && startTimeRef.current !== null) {
       interval = setInterval(() => {
         const now = Date.now();
         const totalPaused = pausedDurationRef.current + (pauseStartTimeRef.current ? now - pauseStartTimeRef.current : 0);
-        const elapsed = Math.floor((now - startTimeRef.current! - totalPaused) / 1000);
+        const elapsed = Math.max(0, Math.floor((now - startTimeRef.current! - totalPaused) / 1000));
+        const live = sessionRef.current;
+        const avgSpeed =
+          live.distance > 0 && elapsed > 0
+            ? live.distance / (elapsed / 3600)
+            : live.avgSpeed;
 
-        setSession((prev) => {
-          const newDuration = Math.max(0, elapsed);
-          const newAvgSpeed = prev.distance > 0 && newDuration > 0
-            ? (prev.distance / (newDuration / 3600))
-            : prev.avgSpeed;
-
-          return {
-            ...prev,
-            duration: newDuration,
-            avgSpeed: newAvgSpeed,
-            calories: Math.floor(prev.distance * 50), // Approximate: 50 calories per km
-          };
-        });
+        const next: SessionData = {
+          distance: live.distance,
+          duration: elapsed,
+          maxSpeed: live.maxSpeed,
+          avgSpeed,
+          calories: Math.floor(live.distance * 50),
+        };
+        sessionRef.current = next;
+        setSession(next);
       }, 1000);
     }
     return () => {
@@ -531,8 +541,8 @@ export function TrackScreen() {
 
   // End activity session on canister
   const endSessionOnCanister = useCallback(async (): Promise<void> => {
+    const sessionId = sessionIdRef.current;
     try {
-      const sessionId = sessionIdRef.current;
       if (!sessionId) return;
       if (!principal) return;
 
@@ -574,6 +584,16 @@ export function TrackScreen() {
           addLog('warn', 'addDistanceXP failed', e);
           // Don't throw - session ended successfully, XP failure is non-critical
         }
+
+        // Credit any Active race pools the rider has joined (staking Groups)
+        try {
+          const poolResult = await submitSessionToJoinedPools(sessionId, principal, identity);
+          if (poolResult.submitted > 0) {
+            addLog('info', `Submitted ride to ${poolResult.submitted} pool(s)`);
+          }
+        } catch (e: any) {
+          addLog('warn', 'Pool ride submit failed (non-critical)', e);
+        }
       } else {
         addLog('error', 'endActivitySession error', res);
       }
@@ -583,7 +603,7 @@ export function TrackScreen() {
     } finally {
       sessionIdRef.current = null;
     }
-  }, [principal, getIdentity]);
+  }, [principal, getIdentity, success, error]);
 
   endSessionRef.current = endSessionOnCanister;
 
@@ -609,8 +629,12 @@ export function TrackScreen() {
 
   // Handle GPS position updates
   const handleLocationUpdate = useCallback((location: Location.LocationObject) => {
-    setCurrentPos(location);
-    setGpsError(null);
+    currentPosRef.current = location;
+    if (!hasGpsFixRef.current) {
+      hasGpsFixRef.current = true;
+      setHasGpsFix(true);
+    }
+    setGpsError((prev) => (prev ? null : prev));
 
     const { latitude, longitude, accuracy, speed } = location.coords;
     // expo-location timestamp is in milliseconds, same as Date.now()
@@ -620,16 +644,6 @@ export function TrackScreen() {
     const currentlyTracking = isTrackingRef.current;
     const currentlyPaused = isPausedRef.current;
 
-    addLog('debug', 'GPS Position update', {
-      latitude,
-      longitude,
-      accuracy,
-      speed,
-      ts,
-      isTracking: currentlyTracking,
-      isPaused: currentlyPaused
-    });
-
     // Always update last point reference (even if not tracking yet) - critical for initial position
     // This ensures we have a reference point when tracking starts
     const last = lastPointRef.current;
@@ -637,10 +651,6 @@ export function TrackScreen() {
     // If not tracking or paused, just update the reference point and return
     if (!currentlyTracking || currentlyPaused) {
       lastPointRef.current = { lat: latitude, lon: longitude, ts };
-      addLog('debug', 'Not tracking or paused, updating reference point only', {
-        isTracking: currentlyTracking,
-        isPaused: currentlyPaused
-      });
       return;
     }
 
@@ -666,31 +676,13 @@ export function TrackScreen() {
           cachedRideDataRef.current.firstCacheTime = ts;
           cachedRideDataRef.current.lastUpdateTime = ts;
           routePointsRef.current.push(seedPoint);
-          addLog('debug', 'Seeded first route point despite <1s gate');
-        } else {
-          addLog('debug', 'Skipping update (less than 1s since last)', {
-            deltaSeconds: deltaSeconds.toFixed(2),
-            deltaMeters: deltaMeters.toFixed(2)
-          });
         }
         return;
       }
-    } else {
-      // First point - no delta, but we need to set the reference
-      addLog('info', 'First GPS point received, setting reference');
     }
-
-    addLog('debug', 'GPS Delta', {
-      deltaMeters: deltaMeters.toFixed(2),
-      deltaSeconds: deltaSeconds.toFixed(2),
-      gpsSpeed: speed !== null && speed !== undefined ? `${(speed * 3.6).toFixed(1)} km/h` : 'N/A'
-    });
 
     // Update last point reference AFTER processing (matches web app pattern)
     lastPointRef.current = { lat: latitude, lon: longitude, ts };
-
-    // Always process updates if we have movement, it's the first point, or enough time has passed
-    const deltaKm = deltaMeters / 1000;
 
     // Calculate instantaneous speed (m/s to km/h) - matches web app pattern
     // Prefer speed from location.coords if available, otherwise calculate from movement
@@ -698,16 +690,9 @@ export function TrackScreen() {
     if (typeof speed === 'number' && speed !== null && isFinite(speed) && speed >= 0) {
       // Use speed from GPS (m/s to km/h) - this is most accurate
       instSpeedKmh = speed * 3.6;
-      addLog('debug', 'Using GPS speed', { gpsSpeed: speed, instSpeedKmh: instSpeedKmh.toFixed(1) });
     } else if (deltaSeconds > 0) {
       // Calculate from movement (m/s to km/h) - fallback when GPS speed not available
-      // This works even for slow movement (walking)
       instSpeedKmh = (deltaMeters / deltaSeconds) * 3.6;
-      addLog('debug', 'Calculated speed from movement', {
-        deltaMeters: deltaMeters.toFixed(2),
-        deltaSeconds: deltaSeconds.toFixed(2),
-        instSpeedKmh: instSpeedKmh.toFixed(1)
-      });
     }
 
     if (!isFinite(instSpeedKmh) || instSpeedKmh < 0) {
@@ -773,35 +758,19 @@ export function TrackScreen() {
     const totalTimeSeconds = cached.firstCacheTime > 0 ? (ts - cached.firstCacheTime) / 1000 : 0;
     cached.avgSpeed = totalTimeSeconds > 0 ? (cached.distance / 1000) / (totalTimeSeconds / 3600) : 0;
 
-    // Update UI session state (for display only) - matches web pattern exactly
-    setSession((prev) => {
-      const newDistanceMeters = (prev.distance * 1000) + deltaMeters;
-      const newDistanceKm = newDistanceMeters / 1000;
-      // Use current duration from timer and add deltaSeconds (matches web app)
-      const totalSeconds = prev.duration + deltaSeconds;
-      const newAvgSpeedKmh = totalSeconds > 0
-        ? (newDistanceKm / (totalSeconds / 3600))
-        : prev.avgSpeed;
-      const newMaxSpeedKmh = Math.max(prev.maxSpeed, instSpeedKmh);
-
-      addLog('debug', 'Session Update', {
-        distance: `${newDistanceKm.toFixed(3)} km`,
-        maxSpeed: `${newMaxSpeedKmh.toFixed(1)} km/h`,
-        avgSpeed: `${newAvgSpeedKmh.toFixed(1)} km/h`,
-        instSpeed: `${instSpeedKmh.toFixed(1)} km/h`,
-        deltaMeters: `${deltaMeters.toFixed(2)} m`,
-        cachedDistance: `${(cached.distance / 1000).toFixed(3)} km`,
-        cachedPoints: cached.routePoints.length,
-      });
-
-      return {
-        ...prev,
-        distance: newDistanceKm,
-        maxSpeed: newMaxSpeedKmh,
-        avgSpeed: newAvgSpeedKmh,
-        calories: Math.floor(newDistanceKm * 50),
-      };
-    });
+    // Update live metrics on ref only — UI tick (1Hz) publishes to React state
+    const prev = sessionRef.current;
+    const newDistanceKm = prev.distance + deltaMeters / 1000;
+    const totalSeconds = prev.duration + deltaSeconds;
+    const newAvgSpeedKmh =
+      totalSeconds > 0 ? newDistanceKm / (totalSeconds / 3600) : prev.avgSpeed;
+    sessionRef.current = {
+      ...prev,
+      distance: newDistanceKm,
+      maxSpeed: Math.max(prev.maxSpeed, instSpeedKmh),
+      avgSpeed: newAvgSpeedKmh,
+      calories: Math.floor(newDistanceKm * 50),
+    };
 
     if (fullRouteRef.current.length < 100_000) {
       fullRouteRef.current.push({ latitude, longitude, timestampMs: ts });
@@ -819,7 +788,7 @@ export function TrackScreen() {
     if (routePointsRef.current.length > 500) {
       routePointsRef.current = routePointsRef.current.slice(-500);
     }
-  }, [flushRideDataToBackend, sendGPSPointToShadowWorker]); // Removed isTracking/isPaused from deps - using refs instead
+  }, [flushRideDataToBackend, sendGPSPointToShadowWorker, haversine]); // Removed isTracking/isPaused from deps - using refs instead
 
   // Record consensus activity every 60 seconds (matches web app pattern)
   // This is CRITICAL for mining participation - allows 0 distance (active tracking = eligible)
@@ -937,13 +906,15 @@ export function TrackScreen() {
       }
 
       // Reset state
-      setSession({
+      const cleared: SessionData = {
         distance: 0,
         duration: 0,
         avgSpeed: 0,
         maxSpeed: 0,
         calories: 0,
-      });
+      };
+      sessionRef.current = cleared;
+      setSession(cleared);
       routePointsRef.current = [];
       fullRouteRef.current = [];
       lastPointRef.current = null;
@@ -976,7 +947,7 @@ export function TrackScreen() {
       // IMPORTANT: Set lastPointRef BEFORE starting tracking so handleLocationUpdate has a reference
       try {
         const initialLocation = await Location.getCurrentPositionAsync({
-          accuracy: Platform.OS === 'ios' ? Location.Accuracy.BestForNavigation : Location.Accuracy.High,
+          accuracy: GPS_ACCURACY,
         });
         addLog('info', 'Got initial position', initialLocation.coords);
         const ts = initialLocation.timestamp || Date.now();
@@ -985,6 +956,11 @@ export function TrackScreen() {
           lon: initialLocation.coords.longitude,
           ts: ts,
         };
+        currentPosRef.current = initialLocation;
+        if (!hasGpsFixRef.current) {
+          hasGpsFixRef.current = true;
+          setHasGpsFix(true);
+        }
         addLog('info', 'Initial reference point set', lastPointRef.current);
       } catch (initialError) {
         addLog('warn', 'Could not get initial position, will use first watch update', initialError);
@@ -1006,10 +982,11 @@ export function TrackScreen() {
 
       try {
         const watchOptions: Location.LocationOptions = {
-          accuracy: Platform.OS === 'ios' ? Location.Accuracy.BestForNavigation : Location.Accuracy.High,
-          // Match BikApp sampling: ~1Hz, accept small moves (was distanceInterval:5 which under-sampled)
+          // High (not BestForNavigation) — far less CPU/battery with comparable bike accuracy
+          accuracy: GPS_ACCURACY,
+          // ~1Hz; 3m filter cuts stationary GPS jitter without under-sampling rides
           timeInterval: 1000,
-          distanceInterval: 1,
+          distanceInterval: 3,
         };
         if (Platform.OS === 'android') {
           (watchOptions as any).mayShowUserSettingsDialog = true;
@@ -1165,8 +1142,8 @@ export function TrackScreen() {
       info('Ride finished', 'Guest rides are local for this session only — sign in to save rides.');
     }
     
-    // Store session data for success modal
-    const finalSessionData = { ...session };
+    // Store session data for success modal (ref is fresher than React state between 1Hz ticks)
+    const finalSessionData = { ...sessionRef.current };
     setSavedSessionData(finalSessionData);
     
     // Update refs immediately so callbacks stop processing
@@ -1274,13 +1251,15 @@ export function TrackScreen() {
     
     // Reset session data after showing success modal
     setTimeout(() => {
-      setSession({
+      const cleared: SessionData = {
         distance: 0,
         duration: 0,
         avgSpeed: 0,
         maxSpeed: 0,
         calories: 0,
-      });
+      };
+      sessionRef.current = cleared;
+      setSession(cleared);
       routePointsRef.current = [];
       lastPointRef.current = null;
       startTimeRef.current = null;
@@ -1302,7 +1281,7 @@ export function TrackScreen() {
     if (gpsError) return 'GPS ERROR';
     if (!permissionStatus || permissionStatus === 'denied') return 'GPS DENIED';
     if (isTracking) {
-      if (currentPos) return 'GPS ACTIVE';
+      if (hasGpsFix) return 'GPS ACTIVE';
       return 'GPS SEARCHING';
     }
     return 'GPS READY';
@@ -1311,7 +1290,7 @@ export function TrackScreen() {
   const getGpsStatusColor = () => {
     if (gpsError) return colors.error;
     if (!permissionStatus || permissionStatus === 'denied') return colors.warning;
-    if (isTracking && currentPos) return colors.success;
+    if (isTracking && hasGpsFix) return colors.success;
     return colors.textSecondary;
   };
 
@@ -1353,7 +1332,7 @@ export function TrackScreen() {
 
         {/* Live Stats Overlay */}
         <LinearGradient
-          colors={['rgba(6, 7, 23, 0.9)', 'rgba(6, 7, 23, 0.98)']}
+          colors={STATS_GRADIENT}
           style={[
             styles.statsOverlay,
             !isTracking && autoStartHydrated && canTrack ? styles.statsOverlayWithAutoStart : null,
@@ -1477,7 +1456,7 @@ export function TrackScreen() {
               activeOpacity={0.8}
             >
               <LinearGradient
-                colors={[colors.brandBlue100, colors.brandPurple]}
+                colors={CTA_GRADIENT}
                 style={styles.centerPlayButtonGradient}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
@@ -1519,7 +1498,7 @@ export function TrackScreen() {
             <View style={styles.successModalContent}>
               <View style={styles.successIconContainer}>
                 <LinearGradient
-                  colors={[colors.success, colors.brandBlue100]}
+                  colors={SUCCESS_CTA_GRADIENT}
                   style={styles.successIconGradient}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
@@ -1581,7 +1560,7 @@ export function TrackScreen() {
                 }}
               >
                 <LinearGradient
-                  colors={[colors.brandBlue100, colors.brandPurple]}
+                  colors={CTA_GRADIENT}
                   style={styles.successButtonGradient}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}

@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState, useCallback } from 'react';
-import { Text, View, StyleSheet, RefreshControl } from 'react-native';
+import { Text, View, StyleSheet, RefreshControl, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
@@ -10,23 +10,28 @@ import { SectionHeader } from '../components/SectionHeader';
 import StatsHero from '../components/StatsHero';
 import QuickActions from '../components/QuickActions';
 import WalletSummary from '../components/WalletSummary';
-import { formatImera, formatXp } from '../utils/format';
+import { Card } from '../components/Card';
 import { useAuth } from '../contexts/AuthContext';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { PressableScale, FadeInView } from '../components/motion';
-import { colors } from '../theme/tokens';
-import { LoadingBlock } from '../components/LoadingBlock';
+import { PressableScale } from '../components/motion';
+import { colors, radii } from '../theme/tokens';
 import { GuestBanner } from '../components/GuestBanner';
 import {
+  getBikeraUserActor,
   getBikeraXpActor,
   getBikeraImeraActor,
-  getBikeraUserActor,
-  getShadowClient,
-  getHost,
+  getBikeraRewardsActor,
 } from '../utils/actors';
-import { HttpAgent } from '@dfinity/agent';
 import { useCachedData } from '../hooks/useCachedData';
 import { startupGate } from '../services/startupGate';
+import { fetchTodayDistanceKm } from '../services/todayDistance';
+import { formatDistanceKm, formatImera, formatXP, fromE8s, E8S_PER_TOKEN } from '../utils/formatStats';
+
+interface DashboardTransaction {
+  id: string;
+  amount: number;
+  timestamp: number;
+}
 
 interface DashboardStats {
   xp: number | null;
@@ -35,6 +40,24 @@ interface DashboardStats {
   streak: number | null;
   todayDistance: number | null;
   xpToNextLevel: number | null;
+  transactions: DashboardTransaction[];
+}
+
+function toNum(v: any): number {
+  return typeof v === 'bigint' ? Number(v) : Number(v);
+}
+
+function readDisplayName(profile: any): string | null {
+  const raw = profile?.displayName;
+  if (!raw) return null;
+  if (Array.isArray(raw)) return raw.length > 0 ? raw[0] : null;
+  return typeof raw === 'string' ? raw : null;
+}
+
+function unwrapSnapshot(raw: any): any | null {
+  if (raw == null) return null;
+  if (Array.isArray(raw)) return raw.length > 0 ? raw[0] : null;
+  return raw;
 }
 
 export function DashboardScreen() {
@@ -48,6 +71,7 @@ export function DashboardScreen() {
     streak: null,
     todayDistance: null,
     xpToNextLevel: null,
+    transactions: [],
   });
   const [refreshing, setRefreshing] = useState(false);
 
@@ -59,47 +83,54 @@ export function DashboardScreen() {
     return 'Good evening';
   }, []);
 
-  // Memoize quick actions to prevent re-creation
-  const quickActions = useMemo(() => [
-    { label: 'Start Ride', icon: 'bicycle', onPress: () => navigation.navigate('Track') },
-    { label: 'Friends', icon: 'people-outline', onPress: () => navigation.navigate('Friends') },
-    { label: 'Leaderboard', icon: 'trophy-outline', onPress: () => navigation.navigate('Leaderboard') },
-    { label: 'Wallet', icon: 'wallet-outline', onPress: () => navigation.navigate('More', { screen: 'Wallet' }) },
-    { label: 'Scan a Bike', icon: 'qr-code-outline', onPress: () => navigation.navigate('More', { screen: 'ScanBike' }) },
-  ], [navigation]);
+  // Quick actions with bicycle icon for Ride
+  const quickActions = useMemo(
+    () => [
+      {
+        label: 'Ride',
+        icon: 'bicycle-outline',
+        onPress: () => navigation.navigate('Track'),
+      },
+      {
+        label: 'Friends',
+        icon: 'people-outline',
+        onPress: () => navigation.navigate('Friends'),
+      },
+      {
+        label: 'Leaderboard',
+        icon: 'trophy-outline',
+        onPress: () => navigation.navigate('Leaderboard'),
+      },
+      {
+        label: 'Wallet',
+        icon: 'wallet-outline',
+        onPress: () => navigation.navigate('More', { screen: 'Wallet' }),
+      },
+      {
+        label: 'Scan a Bike',
+        icon: 'qr-code-outline',
+        onPress: () => navigation.navigate('More', { screen: 'ScanBike' }),
+      },
+    ],
+    [navigation]
+  );
 
-  // Memoize formatted stats
+  // Formatted stats
   const formattedDistance = useMemo(
-    () => (stats.todayDistance !== null ? stats.todayDistance.toFixed(1) : '0.0'),
+    () => formatDistanceKm(stats.todayDistance ?? 0),
     [stats.todayDistance]
   );
 
-  const formattedXP = useMemo(
-    () => (stats.xp !== null ? formatXp(stats.xp) : '0'),
-    [stats.xp]
-  );
-
+  const formattedXP = useMemo(() => formatXP(stats.xp ?? 0), [stats.xp]);
   const formattedImera = useMemo(() => formatImera(stats.imera ?? 0), [stats.imera]);
 
-  // Helper functions
-  const nsToMs = (v: any): number => {
-    if (typeof v === 'bigint') {
-      return Number(v / 1_000_000n);
-    }
-    return Math.floor(Number(v) / 1_000_000);
-  };
-
-  const toNum = (v: any): number => (typeof v === 'bigint' ? Number(v) : Number(v));
-
-  // Fetch dashboard stats with caching
+  // Profile, stats and latest transactions
   const fetchDashboardData = useCallback(async () => {
-    if (!principal) {
-      return null;
-    }
+    if (!principal) return null;
 
     const identity = getIdentity();
     if (!identity) {
-      console.warn('[DASHBOARD] No identity available');
+      if (__DEV__) console.warn('[DASHBOARD] No identity available');
       return null;
     }
 
@@ -107,123 +138,60 @@ export function DashboardScreen() {
     const principalToUse = identityPrincipal !== principal ? identityPrincipal : principal;
     const p = Principal.fromText(principalToUse);
 
-    // Create agent from identity for shadow worker
-    const host = getHost();
-    const isDevelopment = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
-    const agent = new HttpAgent({
-      host,
-      identity,
-      fetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-    });
+    try {
+      const userActor = getBikeraUserActor({}, identity);
+      const xpActor = getBikeraXpActor({}, identity);
+      const imeraActor = getBikeraImeraActor({}, identity);
+      const rewardsActor = getBikeraRewardsActor({}, identity);
 
-    if (isDevelopment) {
-      await agent.fetchRootKey();
-    }
-
-    const shadow = getShadowClient(agent);
-    const imeraActor = getBikeraImeraActor({}, identity);
-    const userActor = getBikeraUserActor({}, identity);
-
-    // Add timeout wrapper
-    const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, defaultValue: T): Promise<T> => {
-      return Promise.race([
-        promise,
-        new Promise<T>((resolve) => {
-          setTimeout(() => {
-            console.warn('[DASHBOARD] Request timed out after', timeoutMs, 'ms');
-            resolve(defaultValue);
-          }, timeoutMs);
+      const [profileRaw, xpProfile, imeraBalance, todayKm, rewardsSnapshot] = await Promise.all([
+        userActor.getCurrentUserProfile(p).catch(() => null),
+        xpActor.getPublicUserXPProfile(p).catch(() => null),
+        imeraActor.icrc1_balance_of({ owner: p, subaccount: [] }).catch(() => 0n),
+        fetchTodayDistanceKm(p, identity).catch((error) => {
+          if (__DEV__) console.warn('[DASHBOARD] Today distance summary failed:', error);
+          return null;
         }),
+        (rewardsActor as any).getRewardsSnapshot?.(p).catch(() => null),
       ]);
-    };
+      const profile = profileRaw ? unwrapSnapshot(profileRaw) : null;
 
-    // Load all snapshots in parallel (optimized - reduced timeout for faster failure)
-    const [xpSnapshot, dashboardSnapshot, imeraBalance, activitySessions, userProfile] = await Promise.all([
-      withTimeout(shadow.getXPSnapshot(p, true).catch(() => null as any), 8000, null as any),
-      withTimeout(shadow.getUserDashboardSnapshot(p, true).catch(() => null as any), 8000, null as any),
-      withTimeout(imeraActor.icrc1_balance_of({ owner: p, subaccount: [] }).catch(() => 0n), 8000, 0n),
-      withTimeout(shadow.getActivitySessions(p, BigInt(20), BigInt(0)).catch(() => [] as any[]), 8000, [] as any[]),
-      withTimeout(userActor.getCurrentUserProfile(p).catch(() => null as any), 8000, null as any),
-    ]);
+      const recentRewards = Array.isArray(rewardsSnapshot?.recentRewards)
+        ? rewardsSnapshot.recentRewards
+        : [];
+      const transactions: DashboardTransaction[] = recentRewards
+        .map((reward: any, index: number) => {
+          const raw = Number(reward.amount || 0);
+          const amount = raw >= E8S_PER_TOKEN / 1000 ? fromE8s(raw) : raw;
+          return {
+            id: `reward-${index}-${reward.roundId ?? index}`,
+            amount,
+            timestamp: Number(reward.timestamp || 0) / 1_000_000 || Date.now(),
+          };
+        })
+        .sort((a: DashboardTransaction, b: DashboardTransaction) => b.timestamp - a.timestamp)
+        .slice(0, 5);
 
-    // Extract XP data
-    let xp = 0;
-    let level = 1;
-    let xpToNextLevel = 0;
-    if (xpSnapshot) {
-      xp = toNum(xpSnapshot.totalXP || 0n);
-      level = toNum(xpSnapshot.level || 1n);
-      const nextLevelXP = toNum(xpSnapshot.nextLevelXP || 0n);
-      xpToNextLevel = Math.max(0, nextLevelXP - xp);
-    } else {
-      try {
-        const xpActor = getBikeraXpActor({}, identity);
-        const [totalXP, currentLevel, nextLevelXP] = await Promise.all([
-          xpActor.getTotalXP(p),
-          xpActor.getLevel(p),
-          xpActor.getXPToNextLevel(p),
-        ]);
-        xp = toNum(totalXP);
-        level = toNum(currentLevel);
-        const nextXP = toNum(nextLevelXP);
-        xpToNextLevel = Math.max(0, nextXP - xp);
-      } catch (e) {
-        console.error('Failed to fetch XP fallback:', e);
-      }
+      return {
+        stats: {
+          xp: xpProfile ? toNum(xpProfile.totalXP || 0n) : toNum(profile?.totalXP ?? 0),
+          level: xpProfile ? toNum(xpProfile.currentLevel || 1n) : null,
+          imera: fromE8s(imeraBalance),
+          streak: xpProfile ? toNum(xpProfile.streakDays || 0n) : null,
+          todayDistance: todayKm,
+          xpToNextLevel: xpProfile ? Math.max(0, toNum(xpProfile.xpToNextLevel || 0n)) : null,
+          transactions,
+        },
+        displayName: profile ? readDisplayName(profile) || profile.username || null : null,
+      };
+    } catch (e) {
+      console.error('Failed to fetch dashboard profile:', e);
+      return null;
     }
-
-    const imera = toNum(imeraBalance) / 100000000;
-
-    let streak = 0;
-    if (dashboardSnapshot?.stats?.streakDays) {
-      streak = toNum(dashboardSnapshot.stats.streakDays);
-    } else if (dashboardSnapshot?.stats?.currentStreak) {
-      streak = toNum(dashboardSnapshot.stats.currentStreak);
-    }
-
-    let todayDistance = 0;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStart = today.getTime();
-
-    (activitySessions as any[]).forEach((session: any) => {
-      const startTime = nsToMs(session.startTime || 0n);
-      if (startTime >= todayStart) {
-        const distanceMeters = toNum(session.distance || 0n);
-        todayDistance += distanceMeters;
-      }
-    });
-
-    const todayDistanceKm = todayDistance / 1000;
-
-    let profileDisplayName: string | null = null;
-    if (userProfile) {
-      const profileOpt = Array.isArray(userProfile) && userProfile.length > 0 ? userProfile[0] : userProfile;
-      if (profileOpt) {
-        const displayNameRaw = (profileOpt as any).displayName;
-        if (displayNameRaw) {
-          profileDisplayName = Array.isArray(displayNameRaw) && displayNameRaw.length > 0
-            ? displayNameRaw[0]
-            : (typeof displayNameRaw === 'string' ? displayNameRaw : null);
-        }
-      }
-    }
-
-    return {
-      stats: {
-        xp,
-        level,
-        imera,
-        streak,
-        todayDistance: todayDistanceKm,
-        xpToNextLevel,
-      },
-      displayName: profileDisplayName,
-    };
   }, [principal, getIdentity]);
 
   const { data: dashboardData, loading: dashboardLoading, refetch } = useCachedData({
-    type: 'dashboard',
+    type: 'dashboard_v2',
     identifier: principal || undefined,
     fetcher: fetchDashboardData,
     enabled: !!principal,
@@ -233,17 +201,24 @@ export function DashboardScreen() {
     minRefetchIntervalMs: 90_000,
   });
 
-  // Update state when cached data is available; unlock cold-start gate for other screens
   useEffect(() => {
     if (!principal) {
       startupGate.unlock('guest-home');
       return;
     }
-    if (dashboardData) {
-      setStats(dashboardData.stats);
-      setDisplayName(dashboardData.displayName);
-      startupGate.unlock('dashboard');
-    } else if (!dashboardLoading) {
+    if (!dashboardData) return;
+
+    setStats((prev) => ({
+      ...dashboardData.stats,
+      todayDistance: dashboardData.stats.todayDistance ?? prev.todayDistance,
+      transactions: dashboardData.stats.transactions ?? prev.transactions,
+    }));
+    setDisplayName(dashboardData.displayName);
+    startupGate.unlock('dashboard');
+  }, [principal, dashboardData]);
+
+  useEffect(() => {
+    if (principal && !dashboardData && !dashboardLoading) {
       startupGate.unlock('dashboard-empty');
     }
   }, [principal, dashboardData, dashboardLoading]);
@@ -259,24 +234,35 @@ export function DashboardScreen() {
     setRefreshing(false);
   }, [refetch]);
 
+  const transactions = stats.transactions || [];
+
   return (
     <Screen
+      scroll
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandBlue100} />
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.brandPurple}
+        />
       }
     >
       <SectionHeader
         title={`${greeting}, ${displayName || username || (isGuest ? 'Guest' : 'Biker')}`}
-        subtitle={principal ? `ID: ${principal.slice(0, 10)}…` : isGuest ? 'Exploring without signing in' : undefined}
+        subtitle={
+          principal
+            ? `ID: ${principal.slice(0, 10)}…`
+            : isGuest
+            ? 'Exploring without signing in'
+            : undefined
+        }
       />
 
       <GuestBanner message="Home, Ride, Friends, Ranks, and More all work. Sign in is at the top of More if you want to save rides and rewards." />
 
       <View style={styles.content}>
-        <FadeInView variant="up">
-          {dashboardLoading && principal ? (
-            <LoadingBlock message="Loading stats…" color={colors.brandBlue100} />
-          ) : principal && !dashboardData ? (
+        <View>
+          {principal && !dashboardData && !dashboardLoading ? (
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>Couldn't load stats</Text>
               <Text style={styles.errorSubtext}>Check your connection and try again.</Text>
@@ -284,63 +270,135 @@ export function DashboardScreen() {
             </View>
           ) : (
             <StatsHero
-              distance={formattedDistance}
-              xp={formattedXP}
-              imera={formattedImera}
+              distance={principal && stats.todayDistance === null ? '—' : formattedDistance}
+              xp={principal && !dashboardData ? '—' : formattedXP}
+              imera={principal && !dashboardData ? '—' : formattedImera}
             />
           )}
-        </FadeInView>
+        </View>
 
         {principal ? (
-          <FadeInView delay={40}>
-            <WalletSummary
-              principal={principal}
-              identity={walletIdentity}
-              refreshKey={walletRefreshKey}
-              onOpenWallet={() => navigation.navigate('More', { screen: 'Wallet' })}
-            />
-          </FadeInView>
+          <WalletSummary
+            principal={principal}
+            identity={walletIdentity}
+            refreshKey={walletRefreshKey}
+            onOpenWallet={() => navigation.navigate('More', { screen: 'Wallet' })}
+          />
         ) : null}
 
-        <FadeInView delay={80} style={styles.sectionContainer}>
+        {/* Quick actions */}
+        <View style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>Quick actions</Text>
           <QuickActions actions={quickActions} />
-        </FadeInView>
+        </View>
 
-        <FadeInView delay={140}>
-          <PressableScale
-            onPress={() => navigation.navigate('Track')}
-            style={styles.rideCard}
-            scaleTo={0.97}
-            accessibilityRole="button"
-            accessibilityLabel="Start a ride"
-          >
-            <LinearGradient
-              colors={[colors.brandIndigo, colors.brandPurple, colors.brandBlue200]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.rideGradient}
+        {/* Wallet View */}
+        {!principal ? (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Wallet</Text>
+              <Pressable
+                onPress={() => navigation.navigate('More', { screen: 'Wallet' })}
+                hitSlop={8}
+              >
+                <Text style={styles.sectionAction}>Open Wallet →</Text>
+              </Pressable>
+            </View>
+
+            <PressableScale
+              onPress={() => navigation.navigate('More', { screen: 'Wallet' })}
+              style={styles.walletCardWrap}
+              scaleTo={0.98}
+              accessibilityRole="button"
+              accessibilityLabel="Open Wallet"
             >
-              <View style={styles.rideTop}>
-                <View style={styles.rideIcon}>
-                  <Ionicons name="bicycle" size={24} color="#0B1220" />
+              <LinearGradient
+                colors={['rgba(66, 192, 251, 0.16)', 'rgba(26, 159, 224, 0.08)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.walletGradient}
+              >
+                <View style={styles.walletRow}>
+                  <View style={styles.walletLeft}>
+                    <Text style={styles.walletLabel}>iMERA Balance</Text>
+                    <Text style={styles.walletAmount}>
+                      {principal && !dashboardData ? '—' : formattedImera} iMERA
+                    </Text>
+                    <Text style={styles.walletHint}>
+                      {isGuest ? 'Sign in to access your tokens' : 'Available for rides & staking'}
+                    </Text>
+                  </View>
+                  <View style={styles.walletRight}>
+                    <View style={styles.walletIconCircle}>
+                      <Ionicons name="wallet" size={24} color={colors.brandBlue100} />
+                    </View>
+                  </View>
                 </View>
-                <View style={styles.rideCopy}>
-                  <Text style={styles.rideTitle}>Ready to ride</Text>
-                  <Text style={styles.rideSubtitle}>
-                    {isGuest
-                      ? 'Track locally as a guest. Sign in later to save rides to your account.'
-                      : 'Open GPS tracking and start earning as you move.'}
+              </LinearGradient>
+            </PressableScale>
+          </View>
+        ) : null}
+
+        {/* Latest Actions / Transactions */}
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Latest actions</Text>
+            {transactions.length > 0 ? (
+              <Pressable
+                onPress={() => navigation.navigate('More', { screen: 'Wallet' })}
+                hitSlop={8}
+              >
+                <Text style={styles.sectionAction}>View all</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {transactions.length === 0 ? (
+            <Card style={styles.emptyActionsCard}>
+              <View style={styles.emptyActionsContent}>
+                <Ionicons name="receipt-outline" size={32} color={colors.textTertiary} />
+                <Text style={styles.emptyActionsTitle}>
+                  {isGuest ? 'Sign in to view actions' : 'No recent actions yet'}
+                </Text>
+                <Text style={styles.emptyActionsSubtitle}>
+                  {isGuest
+                    ? 'Ride rewards and token activity will appear here once you sign in.'
+                    : 'Complete rides to earn iMERA rewards. Your latest transactions will appear here.'}
+                </Text>
+              </View>
+            </Card>
+          ) : (
+            <Card style={styles.actionsListCard}>
+              {transactions.map((tx, idx) => (
+                <View
+                  key={tx.id}
+                  style={[
+                    styles.actionItem,
+                    idx < transactions.length - 1 && styles.actionItemBorder,
+                  ]}
+                >
+                  <View style={styles.actionIconWrap}>
+                    <Ionicons name="gift" size={20} color={colors.success} />
+                  </View>
+                  <View style={styles.actionInfo}>
+                    <Text style={styles.actionTitle}>Ride Reward</Text>
+                    <Text style={styles.actionTime}>
+                      {new Date(tx.timestamp).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                  <Text style={styles.actionAmount}>
+                    +{formatImera(tx.amount)} iMERA
                   </Text>
                 </View>
-              </View>
-              <View style={styles.rideButton}>
-                <Text style={styles.rideButtonText}>Start tracking</Text>
-                <Ionicons name="arrow-forward" size={18} color="#0B1220" />
-              </View>
-            </LinearGradient>
-          </PressableScale>
-        </FadeInView>
+              ))}
+            </Card>
+          )}
+        </View>
       </View>
     </Screen>
   );
@@ -372,191 +430,137 @@ const styles = StyleSheet.create({
   retryButton: {
     minWidth: 140,
   },
-  loadingContainer: {
-    height: 160,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-  loadingText: {
-    color: colors.textSecondary,
-    marginTop: 12,
-    fontSize: 14,
-  },
   sectionContainer: {
     marginTop: 24,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   sectionTitle: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 18,
-    marginBottom: 12,
     letterSpacing: 0.5,
   },
-  miningCard: {
-    marginTop: 24,
-    backgroundColor: 'rgba(6, 7, 23, 0.6)', // Glass-like surface
-    borderRadius: 24,
-    padding: 20,
+  sectionAction: {
+    color: colors.brandBlue100,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  walletCardWrap: {
+    borderRadius: radii.xxl,
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(66, 192, 251, 0.28)',
   },
-  rideCard: {
-    marginTop: 24,
-    borderRadius: 24,
+  walletGradient: {
+    borderRadius: radii.xxl,
+    padding: 18,
   },
-  rideGradient: {
-    borderRadius: 24,
-    padding: 20,
-  },
-  rideTop: {
+  walletRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 18,
+    justifyContent: 'space-between',
   },
-  rideIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
-  rideCopy: {
+  walletLeft: {
     flex: 1,
   },
-  rideTitle: {
+  walletLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  walletAmount: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '800',
+    letterSpacing: 0.2,
     marginBottom: 4,
   },
-  rideSubtitle: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 13,
-    lineHeight: 18,
+  walletHint: {
+    color: colors.textTertiary,
+    fontSize: 12,
   },
-  rideButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    minHeight: 48,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
+  walletRight: {
+    marginLeft: 14,
+  },
+  walletIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(66, 192, 251, 0.16)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  rideButtonText: {
-    color: '#0B1220',
-    fontSize: 16,
-    fontWeight: '800',
-    marginRight: 8,
-  },
-  miningLoadingContainer: {
-    paddingVertical: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  miningLoadingText: {
-    color: colors.textSecondary,
-    marginTop: 8,
-    fontSize: 13,
-  },
-  miningEmptyContainer: {
-    paddingVertical: 20,
-    alignItems: 'center',
-  },
-  miningEmptyTitle: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  miningEmptyText: {
-    color: colors.textMuted,
-    fontSize: 13,
-  },
-  miningHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  activeBadge: {
-    backgroundColor: 'rgba(34, 197, 94, 0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(34, 197, 94, 0.4)',
+    borderColor: 'rgba(66, 192, 251, 0.3)',
   },
-  completedBadge: {
-    backgroundColor: 'rgba(156, 163, 175, 0.2)',
-    borderColor: 'rgba(156, 163, 175, 0.4)',
+  emptyActionsCard: {
+    marginTop: 4,
   },
-  activeText: {
-    color: '#4ade80',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  completedText: {
-    color: '#9ca3af',
-  },
-  progressContainer: {
-    marginBottom: 12,
-  },
-  progressBarBg: {
-    height: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: colors.brandBlue100,
-    borderRadius: 4,
-  },
-  progressLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  progressText: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  timerText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  miningStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
-  },
-  miningStatItem: {
+  emptyActionsContent: {
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 16,
   },
-  miningStatLabel: {
-    color: colors.textMuted,
-    fontSize: 11,
-    marginBottom: 4,
-  },
-  miningStatValue: {
+  emptyActionsTitle: {
     color: colors.textPrimary,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
+    marginTop: 8,
+    marginBottom: 4,
+    textAlign: 'center',
   },
-  miningInfo: {
-    color: colors.textMuted,
+  emptyActionsSubtitle: {
+    color: colors.textTertiary,
     fontSize: 13,
+    textAlign: 'center',
     lineHeight: 18,
+  },
+  actionsListCard: {
+    marginTop: 4,
+  },
+  actionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  actionItemBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border1,
+  },
+  actionIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'rgba(52, 211, 153, 0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  actionInfo: {
+    flex: 1,
+  },
+  actionTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  actionTime: {
+    color: colors.textTertiary,
+    fontSize: 12,
+  },
+  actionAmount: {
+    color: colors.success,
+    fontSize: 14,
+    fontWeight: '800',
+    marginLeft: 8,
   },
 });
-

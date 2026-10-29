@@ -34,13 +34,17 @@ class StartupGateService {
       // eslint-disable-next-line no-console
       console.log(`[STARTUP] Gate unlocked (${_reason})`);
     }
-    this.listeners.forEach((listener) => {
-      try {
-        listener();
-      } catch {
-        // ignore
-      }
-    });
+    // Next turn: let the screen that unlocked the gate paint before other
+    // screens start their own network work on the same JS thread.
+    setTimeout(() => {
+      this.listeners.forEach((listener) => {
+        try {
+          listener();
+        } catch {
+          // ignore
+        }
+      });
+    }, 0);
   }
 
   subscribe(listener: Listener): () => void {

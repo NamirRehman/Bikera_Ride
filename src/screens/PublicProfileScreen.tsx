@@ -12,7 +12,7 @@ import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
 import { useCachedData } from '../hooks/useCachedData';
-import { formatXp } from '../utils/format';
+import { formatDistanceKmLabel, formatXP } from '../utils/formatStats';
 
 interface UserXPProfile {
   userId: any;
@@ -341,12 +341,12 @@ export function PublicProfileScreen() {
             <View style={styles.statsGrid}>
               <View style={styles.statItem}>
                 <Text style={styles.statLabel}>Total XP</Text>
-                <Text style={styles.statValue}>{formatXp(xp.totalXP)}</Text>
+                <Text style={styles.statValue}>{formatXP(xp.totalXP)}</Text>
               </View>
               {allow('totalDistance') && (
                 <View style={styles.statItem}>
                   <Text style={styles.statLabel}>Total Distance</Text>
-                  <Text style={styles.statValue}>{metersToKm(xp.totalDistance).toFixed(1)} km</Text>
+                  <Text style={styles.statValue}>{formatDistanceKmLabel(metersToKm(xp.totalDistance))}</Text>
                 </View>
               )}
               <View style={styles.statItem}>
@@ -355,7 +355,7 @@ export function PublicProfileScreen() {
               </View>
               <View style={styles.statItem}>
                 <Text style={styles.statLabel}>XP To Next Level</Text>
-                <Text style={styles.statValue}>{formatXp(xp.xpToNextLevel)}</Text>
+                <Text style={styles.statValue}>{formatXP(xp.xpToNextLevel)}</Text>
               </View>
             </View>
           </Card>

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { memo, useEffect } from 'react';
 import { Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
@@ -26,7 +26,7 @@ const TAB_META: Record<
   More: { label: 'More', icon: 'grid-outline', iconFocused: 'grid' },
 };
 
-function TabItem({
+const TabItem = memo(function TabItem({
   routeName,
   focused,
   onPress,
@@ -89,7 +89,7 @@ function TabItem({
       </Animated.Text>
     </Pressable>
   );
-}
+});
 
 export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -98,6 +98,7 @@ export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarP
   const tabCount = state.routes.length;
 
   useEffect(() => {
+    if (index.value === state.index) return;
     index.value = withSpring(state.index, SPRING);
   }, [state.index, index]);
 
@@ -132,12 +133,19 @@ export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarP
           const focused = state.index === routeIndex;
 
           const onPress = () => {
+            // Move the pill on the UI thread before the screen mounts or any
+            // in-flight fetch applies its result.
+            index.value = routeIndex;
             const event = navigation.emit({
               type: 'tabPress',
               target: route.key,
               canPreventDefault: true,
             });
-            if (!focused && !event.defaultPrevented) {
+            if (event.defaultPrevented) {
+              index.value = withSpring(state.index, SPRING);
+              return;
+            }
+            if (!focused) {
               navigation.navigate(route.name, route.params);
             }
           };

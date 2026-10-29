@@ -38,6 +38,15 @@ export const idlFactory = ({ IDL }) => {
     'timestamp' : Timestamp,
     'accuracy' : IDL.Opt(IDL.Float64),
   });
+  const RouteSummary = IDL.Record({
+    'duration' : IDL.Nat,
+    'avgSpeed' : Speed,
+    'maxSpeed' : Speed,
+    'createdAt' : Timestamp,
+    'routeId' : IDL.Text,
+    'totalDistance' : Distance,
+    'isValid' : IDL.Bool,
+  });
   const RouteValidation = IDL.Record({
     'duration' : IDL.Nat,
     'avgSpeed' : Speed,
@@ -119,6 +128,11 @@ export const idlFactory = ({ IDL }) => {
     'getUserRouteHistory' : IDL.Func(
         [UserId, IDL.Opt(IDL.Nat)],
         [IDL.Vec(RouteValidation)],
+        ['query'],
+      ),
+    'getUserRouteSummaries' : IDL.Func(
+        [UserId, IDL.Opt(IDL.Nat)],
+        [IDL.Vec(RouteSummary)],
         ['query'],
       ),
     'getValidationConfig' : IDL.Func([], [ValidationConfig], ['query']),

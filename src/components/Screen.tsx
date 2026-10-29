@@ -13,7 +13,7 @@ type ScreenProps = {
   contentClassName?: StyleProp<ViewStyle> | string;
   showHeader?: boolean;
   refreshControl?: React.ReactElement<RefreshControlProps>;
-  /** Soft content enter animation on focus (default on) */
+  /** Soft content enter animation on first focus (default off — avoids tab jank) */
   animate?: boolean;
 };
 
@@ -24,7 +24,7 @@ export function Screen({
   contentClassName,
   showHeader = true,
   refreshControl,
-  animate = true,
+  animate = false,
 }: ScreenProps) {
   const insets = useSafeAreaInsets();
   const incoming = contentStyle ?? (typeof contentClassName === 'string' ? undefined : contentClassName);

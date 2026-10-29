@@ -7,7 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { ConnectIIButton } from '../components/ConnectIIButton';
-import { PressableScale, FadeInView } from '../components/motion';
+import { PressableScale } from '../components/motion';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, radii, shadows } from '../theme/tokens';
 import { webAppPage } from '../config';
@@ -108,7 +108,7 @@ export function MoreHomeScreen() {
       <SectionHeader title="More" subtitle="History, wallet, and profile." />
 
       <View style={styles.content}>
-        <FadeInView variant="up">
+        <View>
           <LinearGradient
             colors={['rgba(66,192,251,0.22)', 'rgba(26,159,224,0.10)']}
             start={{ x: 0, y: 0 }}
@@ -144,10 +144,10 @@ export function MoreHomeScreen() {
               </View>
             </View>
           </LinearGradient>
-        </FadeInView>
+        </View>
 
         {isGuest ? (
-          <FadeInView delay={60} style={styles.connectSection}>
+          <View style={styles.connectSection}>
             <Text style={styles.sectionLabel}>Sign in</Text>
             <Text style={styles.connectCopy}>
               Save rides, XP, and iMERA to your Internet Identity. Guest browsing stays available.
@@ -162,11 +162,11 @@ export function MoreHomeScreen() {
             >
               <Text style={styles.loginScreenLinkText}>Go to login screen</Text>
             </PressableScale>
-          </FadeInView>
+          </View>
         ) : null}
 
-        {SECTIONS.map((section, sectionIndex) => (
-          <FadeInView key={section.label} variant="down" delay={80 + sectionIndex * 60} style={styles.section}>
+        {SECTIONS.map((section) => (
+          <View key={section.label} style={styles.section}>
             <Text style={styles.sectionLabel}>{section.label}</Text>
             <View style={styles.grid}>
               {section.items.map((item) => (
@@ -183,11 +183,11 @@ export function MoreHomeScreen() {
                 />
               ))}
             </View>
-          </FadeInView>
+          </View>
         ))}
 
         {isGuest ? null : (
-          <FadeInView delay={220} style={styles.logoutSection}>
+          <View style={styles.logoutSection}>
             <PressableScale
               onPress={() => logout()}
               style={styles.logoutButton}
@@ -203,7 +203,7 @@ export function MoreHomeScreen() {
                 <Ionicons name="chevron-forward" size={18} color={colors.error} />
               </View>
             </PressableScale>
-          </FadeInView>
+          </View>
         )}
       </View>
     </Screen>

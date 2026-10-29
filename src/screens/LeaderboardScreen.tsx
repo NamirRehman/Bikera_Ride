@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { startTransition, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Pressable,
   Text,
@@ -9,7 +9,9 @@ import {
   RefreshControl,
   Alert,
   Modal,
+  TextInput,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Principal } from '@dfinity/principal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -21,10 +23,10 @@ import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraXpActor, getBikeraUserActor } from '../utils/actors';
 import { useCachedData } from '../hooks/useCachedData';
-import { ThreeDotLoader } from '../components/ThreeDotLoader';
+import { ListSkeleton } from '../components/ListSkeleton';
 import { useToastHelpers } from '../contexts/ToastContext';
-import { fetchPublicUserSummary } from '../services/userSummary';
-import { runInBatches } from '../utils/batch';
+import { fetchPublicCards } from '../services/userSummary';
+import { formatDistanceKmLabel, formatXP } from '../utils/formatStats';
 import {
   COUNTRY_OPTIONS,
   countryName,
@@ -32,7 +34,6 @@ import {
   getStoredCountry,
   saveUserCountry,
 } from '../services/userCountry';
-import { formatXp } from '../utils/format';
 
 interface LeaderboardEntry {
   rank: number;
@@ -49,8 +50,54 @@ interface LeaderboardEntry {
 
 type TimeFilter = 'daily' | 'weekly' | 'monthly' | 'allTime';
 const LEADERBOARD_PAGE_SIZE = 10;
-const SUMMARY_BATCH_SIZE = 6;
 const GLOBAL_LIMIT = 40;
+const BOARD_FETCH_TIMEOUT_MS = 18_000;
+
+type BoardProfile = {
+  userId: string;
+  username: string;
+  xp: number;
+  level: number;
+  distance: number;
+  avatar?: string;
+  country?: string;
+  isCurrentUser: boolean;
+  isFriend: boolean;
+  incomplete?: boolean;
+};
+
+function placeholderProfile(
+  row: { userId: Principal; xpHint?: number },
+  currentPrincipalText: string,
+  friendSet: Set<string>
+): BoardProfile {
+  const userIdText = row.userId.toText();
+  return {
+    userId: userIdText,
+    username: `User${userIdText.slice(0, 8)}`,
+    xp: row.xpHint ?? 0,
+    level: 1,
+    distance: 0,
+    isCurrentUser: currentPrincipalText ? userIdText === currentPrincipalText : false,
+    isFriend: friendSet.has(userIdText),
+  };
+}
+
+function rankProfiles(profiles: BoardProfile[]): LeaderboardEntry[] {
+  const sorted = [...profiles].sort((a, b) => b.xp - a.xp || b.level - a.level);
+  return sorted.map((profile, index) => ({
+    rank: index + 1,
+    userId: profile.userId,
+    username: profile.username,
+    xp: profile.xp,
+    level: profile.level,
+    distance: profile.distance,
+    avatar: profile.avatar,
+    country: profile.country,
+    isCurrentUser: profile.isCurrentUser,
+    isFriend: profile.isFriend,
+  }));
+}
 
 function assertCanisterOk(result: any, fallback = 'Request failed'): void {
   if (result && typeof result === 'object' && 'err' in result) {
@@ -63,19 +110,29 @@ export function LeaderboardScreen() {
   const navigation = useNavigation<any>();
   const { principal, isGuest, getIdentity } = useAuth();
   const { error, success } = useToastHelpers();
-  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [previewEntries, setPreviewEntries] = useState<LeaderboardEntry[]>([]);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('allTime');
   const [friendsOnly, setFriendsOnly] = useState(false);
   const [countryOnly, setCountryOnly] = useState(false);
   const [myCountry, setMyCountry] = useState<string | null>(null);
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [userRank, setUserRank] = useState<number | null>(null);
-  const [totalUsers, setTotalUsers] = useState<number>(0);
+  const [countrySearch, setCountrySearch] = useState('');
+
+  const filteredCountryOptions = useMemo(() => {
+    const q = countrySearch.trim().toLowerCase();
+    if (!q) return COUNTRY_OPTIONS;
+    return COUNTRY_OPTIONS.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
+    );
+  }, [countrySearch]);
   const [visibleCount, setVisibleCount] = useState(LEADERBOARD_PAGE_SIZE);
-  const [hasMore, setHasMore] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const requestGen = useRef(0);
+  const publishPreview = useRef<(rows: LeaderboardEntry[]) => void>(() => {});
+  publishPreview.current = (rows) => {
+    startTransition(() => setPreviewEntries(rows));
+  };
 
   useEffect(() => {
     void getStoredCountry().then(setMyCountry);
@@ -112,99 +169,132 @@ export function LeaderboardScreen() {
       };
       const backendTimeFilter = timeFilterMap[timeFilter] || timeFilterMap.allTime;
 
-      let friendSet = new Set<string>();
-      if (currentPrincipalText) {
-        try {
-          const friendIdsRaw = await userActor.getFriends(Principal.fromText(currentPrincipalText));
-          friendSet = new Set(
-            (Array.isArray(friendIdsRaw) ? friendIdsRaw : []).map((id: any) =>
-              id?.toText ? id.toText() : String(id)
-            )
-          );
-        } catch {
-          friendSet = new Set();
-        }
-      }
-
-      const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      const withHardTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
         Promise.race([
           promise,
-          new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+          new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+          ),
         ]);
+
+      const gen = ++requestGen.current;
+      const publish = (rowsToShow: LeaderboardEntry[]) => {
+        if (requestGen.current !== gen) return;
+        publishPreview.current(rowsToShow);
+      };
+
+      let friendsFetchFailed = false;
+      const friendsPromise: Promise<Set<string>> = currentPrincipalText
+        ? withHardTimeout(
+            userActor.getFriends(Principal.fromText(currentPrincipalText)),
+            8_000,
+            'getFriends'
+          )
+            .then(
+              (friendIdsRaw) =>
+                new Set(
+                  (Array.isArray(friendIdsRaw) ? friendIdsRaw : []).map((id: any) =>
+                    id?.toText ? id.toText() : String(id)
+                  )
+                )
+            )
+            .catch((friendsErr) => {
+              friendsFetchFailed = true;
+              console.warn('[LEADERBOARD] getFriends failed:', friendsErr);
+              return new Set<string>();
+            })
+        : Promise.resolve(new Set<string>());
+
+      const loadBoard = async (): Promise<Array<[Principal, any]>> => {
+        try {
+          return await withHardTimeout(
+            xpActor.getLeaderboardWithFilter(BigInt(GLOBAL_LIMIT), backendTimeFilter),
+            BOARD_FETCH_TIMEOUT_MS,
+            'getLeaderboardWithFilter'
+          );
+        } catch (boardErr) {
+          console.warn('[LEADERBOARD] Filtered board failed, falling back to getLeaderboard:', boardErr);
+          return withHardTimeout(
+            xpActor.getLeaderboard(BigInt(GLOBAL_LIMIT)),
+            BOARD_FETCH_TIMEOUT_MS,
+            'getLeaderboard'
+          );
+        }
+      };
 
       type RawRow = { userId: Principal; xpHint?: number };
       let rows: RawRow[] = [];
+      let friendSet = new Set<string>();
 
       if (friendsOnly) {
-        // Strict friends-only: never fall back to the global board
+        friendSet = await friendsPromise;
         if (!currentPrincipalText) {
           return { entries: [], userRank: null, totalUsers: 0, hasMore: false };
         }
+        if (friendsFetchFailed) {
+          throw new Error('Could not load friends list. Pull to refresh.');
+        }
         if (friendSet.size === 0) {
-          // No friends yet — show empty (not world rankings, not just yourself)
           return { entries: [], userRank: null, totalUsers: 0, hasMore: false };
         }
-        rows = Array.from(friendSet).map((id) => ({ userId: Principal.fromText(id) }));
+        rows = Array.from(friendSet)
+          .slice(0, GLOBAL_LIMIT)
+          .map((id) => ({ userId: Principal.fromText(id) }));
         if (!friendSet.has(currentPrincipalText)) {
           rows.push({ userId: Principal.fromText(currentPrincipalText) });
         }
       } else {
-        const leaderboardData = await xpActor.getLeaderboardWithFilter(
-          BigInt(GLOBAL_LIMIT),
-          backendTimeFilter
-        );
-        rows = (leaderboardData || []).map(([userId, amount]: [Principal, any]) => ({
+        const boardPromise = loadBoard();
+        const leaderboardRows = await boardPromise;
+        rows = (leaderboardRows || []).map(([userId, amount]: [Principal, any]) => ({
           userId,
           xpHint: Number(amount || 0),
         }));
+        if (rows.length > 0 && !countryOnly) {
+          publish(rankProfiles(rows.map((row) => placeholderProfile(row, currentPrincipalText, new Set()))));
+        }
+        friendSet = await friendsPromise;
       }
 
       if (rows.length === 0) {
         return { entries: [], userRank: null, totalUsers: 0, hasMore: false };
       }
 
-      const profiles = await runInBatches(rows, SUMMARY_BATCH_SIZE, async (row) => {
+      if (!countryOnly) {
+        publish(rankProfiles(rows.map((row) => placeholderProfile(row, currentPrincipalText, friendSet))));
+      }
+
+      let cardsFailed = false;
+      const summaries = await fetchPublicCards(rows.map((row) => row.userId)).catch((cardErr) => {
+        cardsFailed = true;
+        console.warn('[LEADERBOARD] Public cards failed:', cardErr);
+        return [];
+      });
+      const summaryById = new Map(summaries.map((summary) => [summary.userId, summary]));
+      const profiles: BoardProfile[] = rows.map((row) => {
         const userIdText = row.userId.toText();
-        const fallback = {
+        const summary = summaryById.get(userIdText);
+        return {
           userId: userIdText,
-          username: `User${userIdText.slice(0, 8)}`,
-          xp: row.xpHint ?? 0,
-          level: 1,
-          distance: 0,
-          avatar: undefined as string | undefined,
-          country: undefined as string | undefined,
+          username: summary?.username || `User${userIdText.slice(0, 8)}`,
+          xp: friendsOnly ? (summary?.xp ?? 0) : (row.xpHint ?? summary?.xp ?? 0),
+          level: summary?.level ?? 1,
+          distance: summary?.distance ?? 0,
+          avatar: summary?.avatar,
+          country: summary?.country,
           isCurrentUser: currentPrincipalText ? userIdText === currentPrincipalText : false,
           isFriend: friendSet.has(userIdText),
+          incomplete: cardsFailed && !summary?.country,
         };
-        try {
-          const summary = await withTimeout(
-            fetchPublicUserSummary(row.userId),
-            2500,
-            {
-              userId: userIdText,
-              username: fallback.username,
-              level: 1,
-              xp: row.xpHint ?? 0,
-              distance: 0,
-            }
-          );
-          return {
-            userId: userIdText,
-            username: summary.username || fallback.username,
-            xp: friendsOnly ? (summary.xp ?? 0) : (row.xpHint ?? summary.xp ?? 0),
-            level: summary.level ?? 1,
-            distance: summary.distance ?? 0,
-            avatar: summary.avatar,
-            country: summary.country,
-            isCurrentUser: fallback.isCurrentUser,
-            isFriend: fallback.isFriend,
-          };
-        } catch {
-          return fallback;
-        }
       });
+      const visible = countryOnly
+        ? profiles.filter(
+            (p) => p.isCurrentUser || (p.country && storedCountry && p.country.toUpperCase() === storedCountry.toUpperCase())
+          )
+        : profiles;
+      if (visible.length > 0) publish(rankProfiles(visible));
 
-      let filtered = profiles;
+      let filtered = profiles as BoardProfile[];
       if (countryOnly) {
         if (!storedCountry) {
           return { entries: [], userRank: null, totalUsers: 0, hasMore: false, needsCountry: true as const };
@@ -212,22 +302,17 @@ export function LeaderboardScreen() {
         filtered = profiles.filter(
           (p) => p.isCurrentUser || (p.country && p.country.toUpperCase() === storedCountry.toUpperCase())
         );
+        // Timed-out profiles lack country — don't cache a false empty country board
+        if (
+          filtered.length === 0 &&
+          profiles.some((p) => p.incomplete) &&
+          profiles.some((p) => !p.isCurrentUser)
+        ) {
+          throw new Error('Country rankings timed out. Pull to refresh.');
+        }
       }
 
-      filtered.sort((a, b) => b.xp - a.xp || b.level - a.level);
-
-      const rankedEntries: LeaderboardEntry[] = filtered.map((profile, index) => ({
-        rank: index + 1,
-        userId: profile.userId,
-        username: profile.username,
-        xp: profile.xp,
-        level: profile.level,
-        distance: profile.distance,
-        avatar: profile.avatar,
-        country: profile.country,
-        isCurrentUser: profile.isCurrentUser,
-        isFriend: profile.isFriend,
-      }));
+      const rankedEntries = rankProfiles(filtered);
 
       const currentUserEntry = rankedEntries.find((e) => e.isCurrentUser);
 
@@ -240,10 +325,9 @@ export function LeaderboardScreen() {
       };
     } catch (e) {
       console.error('Failed to fetch leaderboard:', e);
-      error('Leaderboard Error', 'Failed to load rankings.');
       throw e instanceof Error ? e : new Error(String(e));
     }
-  }, [timeFilter, friendsOnly, countryOnly, principal, myCountry, error]);
+  }, [timeFilter, friendsOnly, countryOnly, principal, myCountry]);
 
   const cacheKey = useMemo(
     () => `xp:${timeFilter}:f${friendsOnly ? 1 : 0}:c${countryOnly ? 1 : 0}:${myCountry || 'none'}`,
@@ -263,40 +347,27 @@ export function LeaderboardScreen() {
 
   useEffect(() => {
     setVisibleCount(LEADERBOARD_PAGE_SIZE);
-    setHasMore(true);
-    // Clear previous filter's rows immediately so global list never flashes under Friends
-    setEntries([]);
-    setUserRank(null);
-    setTotalUsers(0);
-    setLoading(true);
+    setPreviewEntries([]);
   }, [timeFilter, friendsOnly, countryOnly, myCountry]);
 
-  useEffect(() => {
-    if (leaderboardData) {
-      setEntries(leaderboardData.entries.slice(0, visibleCount));
-      setUserRank(leaderboardData.userRank);
-      setTotalUsers(leaderboardData.totalUsers);
-      setHasMore(visibleCount < leaderboardData.entries.length);
-      setLoading(false);
-    } else if (!leaderboardLoading) {
-      setLoading(false);
-      if (friendsOnly || countryOnly) {
-        setEntries([]);
-        setUserRank(null);
-        setTotalUsers(0);
-      }
-    }
-  }, [leaderboardData, leaderboardLoading, visibleCount, friendsOnly, countryOnly]);
+  const sourceEntries = leaderboardData?.entries ?? previewEntries;
+  const visibleEntries = useMemo(
+    () => sourceEntries.slice(0, visibleCount),
+    [sourceEntries, visibleCount]
+  );
+  const userRank = leaderboardData?.userRank ?? null;
+  const totalUsers = leaderboardData?.totalUsers ?? sourceEntries.length;
+  const hasMore = visibleCount < sourceEntries.length;
 
-  const handleToggleFriends = () => {
+  const handleToggleFriends = useCallback(() => {
     if (!principal && !friendsOnly) {
       Alert.alert('Sign in required', 'Sign in from More to view a friends-only leaderboard.');
       return;
     }
     setFriendsOnly((v) => !v);
-  };
+  }, [principal, friendsOnly]);
 
-  const handleToggleCountry = async () => {
+  const handleToggleCountry = useCallback(async () => {
     // Off → world (default)
     if (countryOnly) {
       setCountryOnly(false);
@@ -314,7 +385,7 @@ export function LeaderboardScreen() {
     }
     setMyCountry(stored);
     setCountryOnly(true);
-  };
+  }, [countryOnly, myCountry]);
 
   const handleSelectCountry = async (code: string) => {
     try {
@@ -330,7 +401,7 @@ export function LeaderboardScreen() {
     }
   };
 
-  const sendFriendRequest = async (userId: string, username: string) => {
+  const sendFriendRequest = useCallback(async (userId: string, username: string) => {
     if (!principal) {
       Alert.alert('Sign in required', 'Sign in from More to send friend requests.');
       return;
@@ -351,9 +422,9 @@ export function LeaderboardScreen() {
     } finally {
       setSendingTo(null);
     }
-  };
+  }, [principal, getIdentity, success, error]);
 
-  const onPressEntry = (item: LeaderboardEntry) => {
+  const onPressEntry = useCallback((item: LeaderboardEntry) => {
     if (item.isCurrentUser) {
       navigation.navigate('More', { screen: 'Profile' });
       return;
@@ -375,8 +446,8 @@ export function LeaderboardScreen() {
 
     buttons.push({ text: 'Cancel', style: 'cancel' });
 
-    Alert.alert(item.username, `${formatXp(item.xp)} XP · Level ${item.level}`, buttons);
-  };
+    Alert.alert(item.username, `${formatXP(item.xp)} XP · Level ${item.level}`, buttons);
+  }, [navigation, isGuest, principal, sendingTo, sendFriendRequest]);
 
   const getRankColor = (rank: number): string[] => {
     switch (rank) {
@@ -394,12 +465,12 @@ export function LeaderboardScreen() {
     return null;
   };
 
-  const isInitialLoading = loading && entries.length === 0;
+  const isInitialLoading = leaderboardLoading && visibleEntries.length === 0 && !leaderboardError;
 
   const handleLoadMore = useCallback(() => {
-    if (!hasMore || loading) return;
+    if (!hasMore) return;
     setVisibleCount((prev) => prev + LEADERBOARD_PAGE_SIZE);
-  }, [hasMore, loading]);
+  }, [hasMore]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -453,19 +524,19 @@ export function LeaderboardScreen() {
       </View>
 
       <View style={styles.statsContainer}>
-        <Text style={styles.mainStat}>{formatXp(item.xp)} XP</Text>
+        <Text style={styles.mainStat}>{formatXP(item.xp)} XP</Text>
         {!item.isFriend && !item.isCurrentUser ? (
           <Text style={styles.subStat}>Tap to add</Text>
         ) : (
-          <Text style={styles.subStat}>{item.distance.toFixed(1)} km</Text>
+          <Text style={styles.subStat}>{formatDistanceKmLabel(item.distance)}</Text>
         )}
       </View>
     </Pressable>
-  ), [sendingTo, isGuest, principal]);
+  ), [onPressEntry]);
 
   const hasCountry = !!myCountry;
 
-  const listHeader = (
+  const listHeader = useMemo(() => (
     <View style={styles.listHeader}>
       <SectionHeader title="Leaderboard" subtitle="Compete with riders worldwide" />
 
@@ -541,48 +612,46 @@ export function LeaderboardScreen() {
         ) : null}
       </View>
     </View>
-  );
+  ), [friendsOnly, countryOnly, hasCountry, myCountry, timeFilter, handleToggleFriends, handleToggleCountry]);
 
-  const listFooter = (
-    <View style={styles.listFooter}>
-      {loading && entries.length > 0 ? (
-        <View style={styles.loadingContainer}>
-          <ThreeDotLoader color={colors.brandPurple} size="large" />
-          <Text style={styles.loadingText}>Loading more…</Text>
-        </View>
-      ) : hasMore ? (
-        <Pressable
-          style={({ pressed }) => [styles.loadMoreButton, pressed && { opacity: 0.9 }]}
-          onPress={handleLoadMore}
-        >
-          <Text style={styles.loadMoreText}>Load more</Text>
-        </Pressable>
-      ) : (
-        <View style={styles.footerSpacer} />
-      )}
-
-      {principal ? (
-        <View style={styles.userPositionCard}>
-          <LinearGradient
-            colors={[colors.brandPurple + '1A', colors.brandBlue300 + '1A']}
-            style={styles.userPositionGradient}
+  const listFooter = useMemo(
+    () => (
+      <View style={styles.listFooter}>
+        {hasMore ? (
+          <Pressable
+            style={({ pressed }) => [styles.loadMoreButton, pressed && { opacity: 0.9 }]}
+            onPress={handleLoadMore}
           >
-            <View>
-              <Text style={styles.userPositionTitle}>Your Position</Text>
-              <Text style={styles.userPositionSubtitle}>Keep riding to climb the ranks!</Text>
-            </View>
-            <View style={styles.userPositionRank}>
-              <Text style={styles.userPositionRankNumber}>
-                {userRank !== null ? `#${userRank}` : '--'}
-              </Text>
-              <Text style={styles.userPositionTotal}>
-                of {totalUsers} {totalUsers === 1 ? 'rider' : 'riders'}
-              </Text>
-            </View>
-          </LinearGradient>
-        </View>
-      ) : null}
-    </View>
+            <Text style={styles.loadMoreText}>Load more</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.footerSpacer} />
+        )}
+
+        {principal ? (
+          <View style={styles.userPositionCard}>
+            <LinearGradient
+              colors={[colors.brandPurple + '1A', colors.brandBlue300 + '1A']}
+              style={styles.userPositionGradient}
+            >
+              <View>
+                <Text style={styles.userPositionTitle}>Your Position</Text>
+                <Text style={styles.userPositionSubtitle}>Keep riding to climb the ranks!</Text>
+              </View>
+              <View style={styles.userPositionRank}>
+                <Text style={styles.userPositionRankNumber}>
+                  {userRank !== null ? `#${userRank}` : '--'}
+                </Text>
+                <Text style={styles.userPositionTotal}>
+                  of {totalUsers} {totalUsers === 1 ? 'rider' : 'riders'}
+                </Text>
+              </View>
+            </LinearGradient>
+          </View>
+        ) : null}
+      </View>
+    ),
+    [hasMore, handleLoadMore, principal, userRank, totalUsers]
   );
 
   const emptySubtitle = friendsOnly
@@ -592,19 +661,16 @@ export function LeaderboardScreen() {
       : 'Start riding to appear on the leaderboard';
 
   return (
-    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen scroll={false} animate={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingTop: 0 }}>
       <FlatList
-        data={entries}
+        data={visibleEntries}
         keyExtractor={(item) => item.userId}
         renderItem={renderEntryItem}
         ListHeaderComponent={listHeader}
         ListFooterComponent={listFooter}
         ListEmptyComponent={
           isInitialLoading ? (
-            <View style={styles.loadingContainer}>
-              <ThreeDotLoader color={colors.brandPurple} size="large" />
-              <Text style={styles.loadingText}>Loading rankings...</Text>
-            </View>
+            <ListSkeleton rows={6} />
           ) : leaderboardError ? (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>Couldn't load leaderboard</Text>
@@ -627,9 +693,10 @@ export function LeaderboardScreen() {
         onEndReached={hasMore ? handleLoadMore : undefined}
         onEndReachedThreshold={0.5}
         initialNumToRender={LEADERBOARD_PAGE_SIZE}
-        maxToRenderPerBatch={6}
-        windowSize={5}
-        removeClippedSubviews={false}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandPurple} />
         }
@@ -640,8 +707,25 @@ export function LeaderboardScreen() {
           <Pressable style={styles.modalCard} onPress={() => {}}>
             <Text style={styles.modalTitle}>Your country</Text>
             <Text style={styles.modalSubtitle}>Used for Country rankings</Text>
-            <ScrollView style={{ maxHeight: 360 }}>
-              {COUNTRY_OPTIONS.map((opt) => (
+            <View style={styles.countrySearchWrap}>
+              <Ionicons name="search" size={16} color={colors.textTertiary} style={{ marginRight: 8 }} />
+              <TextInput
+                value={countrySearch}
+                onChangeText={setCountrySearch}
+                placeholder="Search country or code..."
+                placeholderTextColor={colors.textMuted}
+                style={styles.countrySearchInput}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              {countrySearch.length > 0 ? (
+                <Pressable onPress={() => setCountrySearch('')} hitSlop={6}>
+                  <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+                </Pressable>
+              ) : null}
+            </View>
+            <ScrollView style={{ maxHeight: 320 }}>
+              {filteredCountryOptions.map((opt) => (
                 <Pressable
                   key={opt.code}
                   onPress={() => { void handleSelectCountry(opt.code); }}
@@ -944,6 +1028,23 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: '800',
+  },
+  countrySearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginVertical: 10,
+  },
+  countrySearchInput: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+    padding: 0,
   },
   modalSubtitle: {
     color: colors.textTertiary,
