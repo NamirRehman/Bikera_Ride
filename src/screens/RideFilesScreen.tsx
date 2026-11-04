@@ -6,7 +6,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { Card } from '../components/Card';
-import { PrimaryButton } from '../components/PrimaryButton';
 import { useAuth } from '../contexts/AuthContext';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { colors } from '../theme/tokens';
@@ -14,8 +13,6 @@ import {
   deleteLocalRide,
   listLocalRides,
   loadLocalRide,
-  pickAndImportRideFile,
-  saveLocalRide,
   shareGpx,
   type LocalRideSummary,
 } from '../services/rideFiles';
@@ -26,12 +23,11 @@ const SOURCE_LABEL: Record<LocalRideSummary['source'], string> = {
   fit: 'FIT file',
 };
 
-/** Imported rides are a personal route library, not evidence for stakes or rewards. */
+/** Rides saved on this device, to export as GPX. Importing ride files is not offered: files can be faked. */
 export function RideFilesScreen() {
   const { principal } = useAuth();
-  const { success, error: showError } = useToastHelpers();
+  const { error: showError } = useToastHelpers();
   const [rides, setRides] = useState<LocalRideSummary[]>([]);
-  const [importing, setImporting] = useState(false);
   const [exportingId, setExportingId] = useState<string | null>(null);
   // The toast helpers are new functions every render; keep them out of refresh's dependencies.
   const showErrorRef = useRef(showError);
@@ -55,21 +51,6 @@ export function RideFilesScreen() {
       void refresh();
     }, [refresh]),
   );
-
-  const importFile = async () => {
-    setImporting(true);
-    try {
-      const ride = await pickAndImportRideFile();
-      if (!ride) return;
-      await saveLocalRide(ride, principal || '');
-      await refresh();
-      success('Ride imported', `${ride.title} was saved on this device.`);
-    } catch (err) {
-      showError('Could not import', err instanceof Error ? err.message : 'Could not import this file.');
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const exportRide = async (summary: LocalRideSummary) => {
     setExportingId(summary.id);
@@ -99,21 +80,14 @@ export function RideFilesScreen() {
     <Screen>
       <SectionHeader
         title="Ride files"
-        subtitle="Open a GPX or FIT ride from Strava, Garmin, or Wahoo, or export your Bikera rides as GPX. Files stay on this device unless you share them."
+        subtitle="Rides you finish in Bikera are saved on this device. Export any of them as GPX for Strava, Garmin, or your own records."
       />
-
-      <PrimaryButton
-        label={importing ? 'Importing…' : 'Import GPX or FIT'}
-        onPress={() => { void importFile(); }}
-        disabled={importing}
-      />
-      <Text style={styles.note}>Imported files do not count toward stakes, races, or rewards.</Text>
 
       {rides.length === 0 ? (
         <Card style={styles.empty}>
           <Ionicons name="document-text-outline" size={28} color={colors.textTertiary} style={styles.emptyIcon} />
           <Text style={styles.emptyText}>
-            No ride files yet. Rides you finish in the Ride tab are saved here too, ready to export.
+            No ride files yet. Rides you finish in the Ride tab are saved here, ready to export.
           </Text>
         </Card>
       ) : (

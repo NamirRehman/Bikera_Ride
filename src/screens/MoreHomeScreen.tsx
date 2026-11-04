@@ -39,7 +39,7 @@ const SECTIONS: { label: string; items: MenuItem[] }[] = [
     label: 'Ride Tools',
     items: [
       { title: 'Scan a Bike', icon: 'qr-code', to: 'ScanBike', color: colors.success, subtitle: 'Partner bike QR code' },
-      { title: 'Ride Files', icon: 'document-text', to: 'RideFiles', color: colors.brandViolet, subtitle: 'Import or export GPX / FIT' },
+      { title: 'Ride Files', icon: 'document-text', to: 'RideFiles', color: colors.brandViolet, subtitle: 'Export your rides as GPX' },
     ],
   },
   {
