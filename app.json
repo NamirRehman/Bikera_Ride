@@ -58,12 +58,17 @@
         "UIBackgroundModes": [
           "location",
           "fetch",
+          "remote-notification",
+          "location",
+          "fetch",
           "remote-notification"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       },
       "usesIcloudStorage": false,
       "usesAppleSignIn": false,
       "associatedDomains": [
+        "applinks:bikera.app",
         "applinks:bikera.app"
       ]
     },
@@ -94,7 +99,8 @@
         "android.permission.WAKE_LOCK",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.RECEIVE_BOOT_COMPLETED"
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.CAMERA"
       ],
       "blockedPermissions": [
         "android.permission.CAMERA",
@@ -111,7 +117,10 @@
             "host": "auth",
             "pathPrefix": "/callback"
           },
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         },
         {
           "action": "VIEW",
@@ -123,7 +132,10 @@
               "pathPrefix": "/"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ],
       "softwareKeyboardLayoutMode": "resize"
