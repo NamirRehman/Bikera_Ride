@@ -270,6 +270,18 @@ export function TrackScreen() {
       if (res && 'ok' in res) {
         sessionIdRef.current = res.ok as string;
         addLog('info', 'Session started', { sessionId: sessionIdRef.current });
+
+        // Let the shadow worker confirm this ride on-chain (fire and forget; optional).
+        void (async () => {
+          try {
+            const ticket = await (actor as any).beginShadowRide();
+            if (ticket && 'ok' in ticket && (await ShadowWorkerService.startRide(ticket.ok))) {
+              addLog('info', '[SHADOW WORKER] Ride confirmation started');
+            }
+          } catch (e) {
+            addLog('debug', '[SHADOW WORKER] Ride confirmation unavailable', e);
+          }
+        })();
         success('Tracking started', 'Your ride is now being recorded.');
 
         // Record initial activity in consensus (fire and forget) - matches web app

@@ -290,6 +290,7 @@ service : {
   /// minutes, that the attestation service redeems in `completeExternalLink`. Issuing a new
   /// nonce voids any earlier one for the same source.
   beginExternalLink: (AttestationSource) -> (Result);
+  beginShadowRide: () -> (Result);
   /// Clear user data (admin only)
   clearUserData: (UserId) -> (Result);
   /// Redeem a link nonce once the rider has authorised the external account. Allowlisted

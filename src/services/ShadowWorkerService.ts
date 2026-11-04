@@ -61,6 +61,8 @@ export interface HealthResponse {
 
 export class ShadowWorkerService {
     private static url = SHADOW_WORKER_URL;
+    /** The ride the worker is confirming on-chain (from /ride/start); sent with every point. */
+    private static rideId: string | null = null;
     /** Cached: Railway returns 404 Application not found when deployment is gone. */
     private static unavailableUntil = 0;
 
@@ -92,6 +94,29 @@ export class ShadowWorkerService {
         if (status === 404 || status === 410 || status === 501 || status === 502) return true;
         const lower = (body || '').toLowerCase();
         return lower.includes('application not found') || lower.includes('not found');
+    }
+
+    /**
+     * Ask the worker to confirm this ride on-chain. `ticket` comes from
+     * `bikera_user.beginShadowRide`, a signed call that proves who is riding. Never throws:
+     * without it the ride is still saved, just not confirmed by the worker.
+     */
+    static async startRide(ticket: string): Promise<boolean> {
+        this.rideId = null;
+        try {
+            const response = await fetch(`${this.url}/ride/start`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticket }),
+            });
+            if (!response.ok) return false;
+            const result = await response.json();
+            if (typeof result.rideId !== 'string') return false;
+            this.rideId = result.rideId;
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -164,7 +189,7 @@ export class ShadowWorkerService {
                                     minPoints: BATCH_CONFIG.MIN_POINTS,
                                 }),
                             },
-                            body: JSON.stringify({ userId, point }),
+                            body: JSON.stringify({ userId, point, ...(this.rideId ? { rideId: this.rideId } : {}) }),
                             signal: controller.signal,
                         });
 
@@ -218,6 +243,9 @@ export class ShadowWorkerService {
      * Soft-fails when Railway worker is missing (404) — ride save continues via canister.
      */
     static async flushBatch(userId: string): Promise<FlushBatchResponse> {
+        // The ride ends here whether or not the flush gets through.
+        const rideId = this.rideId;
+        this.rideId = null;
         if (this.isTemporarilyUnavailable()) {
             return { success: false, submitted: false, reason: 'worker_unavailable' };
         }
@@ -235,6 +263,7 @@ export class ShadowWorkerService {
                     },
                     body: JSON.stringify({
                         userId,
+                        ...(rideId ? { rideId } : {}),
                         config: {
                             maxWaitMs: 5000, // Maximum wait for batch processing
                             validateBeforeSubmit: true, // Ensure validation before submission

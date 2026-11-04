@@ -239,6 +239,7 @@ export const idlFactory = ({ IDL }) => {
     'addTrustedRideReader' : IDL.Func([IDL.Principal], [Result], []),
     'addTrustedRideWriter' : IDL.Func([IDL.Principal], [Result], []),
     'beginExternalLink' : IDL.Func([AttestationSource], [Result], []),
+    'beginShadowRide' : IDL.Func([], [Result], []),
     'clearUserData' : IDL.Func([UserId], [Result], []),
     'completeExternalLink' : IDL.Func(
         [IDL.Text, AttestationSource, IDL.Text],

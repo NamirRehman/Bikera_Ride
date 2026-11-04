@@ -235,6 +235,7 @@ export interface _SERVICE {
   'addTrustedRideReader' : ActorMethod<[Principal], Result>,
   'addTrustedRideWriter' : ActorMethod<[Principal], Result>,
   'beginExternalLink' : ActorMethod<[AttestationSource], Result>,
+  'beginShadowRide' : ActorMethod<[], Result>,
   'clearUserData' : ActorMethod<[UserId], Result>,
   'completeExternalLink' : ActorMethod<
     [string, AttestationSource, string],
