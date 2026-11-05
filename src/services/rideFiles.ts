@@ -67,6 +67,12 @@ export async function deleteLocalRide(id: string): Promise<void> {
   writeIndex(readIndex().filter((r) => r.id !== id));
 }
 
+/** Account erasure must remove only this rider's local routes on a shared device. */
+export async function eraseLocalRides(ownerPrincipal: string): Promise<void> {
+  const rides = await listLocalRides(ownerPrincipal);
+  for (const ride of rides) await deleteLocalRide(ride.id);
+}
+
 function validPoint(point: RidePoint): boolean {
   return Number.isFinite(point.latitude) && Math.abs(point.latitude) <= 90 &&
     Number.isFinite(point.longitude) && Math.abs(point.longitude) <= 180 &&

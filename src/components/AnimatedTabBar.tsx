@@ -1,10 +1,13 @@
-import React, { memo, useEffect } from 'react';
+import React, { memo, useContext, useEffect } from 'react';
 import { Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { BottomTabBarHeightCallbackContext } from '@react-navigation/bottom-tabs';
 import Animated, {
   interpolate,
+  ReduceMotion,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withSpring,
 } from 'react-native-reanimated';
@@ -12,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors } from '../theme/tokens';
 
-const SPRING = { damping: 18, stiffness: 240, mass: 0.75 };
+const SPRING = { duration: 400, dampingRatio: 1, reduceMotion: ReduceMotion.System };
 
 const TAB_META: Record<
   string,
@@ -32,41 +35,46 @@ const TabItem = memo(function TabItem({
   onPress,
   onLongPress,
   accessibilityLabel,
+  testID,
 }: {
   routeName: string;
   focused: boolean;
   onPress: () => void;
   onLongPress: () => void;
   accessibilityLabel?: string;
+  testID?: string;
 }) {
   const progress = useSharedValue(focused ? 1 : 0);
+  const reducedMotion = useReducedMotion();
   const meta =
     TAB_META[routeName] ??
     ({ label: routeName, icon: 'ellipse-outline', iconFocused: 'ellipse' } as const);
 
   useEffect(() => {
-    progress.value = withSpring(focused ? 1 : 0, SPRING);
+    progress.set(withSpring(focused ? 1 : 0, SPRING));
   }, [focused, progress]);
 
   const iconStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: interpolate(progress.value, [0, 1], [1, 1.12]) },
-      { translateY: interpolate(progress.value, [0, 1], [0, -1]) },
+    transform: reducedMotion ? [] : [
+      { scale: interpolate(progress.get(), [0, 1], [1, 1.12]) },
+      { translateY: interpolate(progress.get(), [0, 1], [0, -1]) },
     ],
   }));
 
   const labelStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(progress.value, [0, 1], [0.55, 1]),
-    transform: [{ translateY: interpolate(progress.value, [0, 1], [2, 0]) }],
+    opacity: interpolate(progress.get(), [0, 1], [0.55, 1]),
+    transform: reducedMotion ? [] : [{ translateY: interpolate(progress.get(), [0, 1], [2, 0]) }],
   }));
 
   return (
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
-      accessibilityRole="button"
-      accessibilityState={focused ? { selected: true } : {}}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: focused }}
+      aria-selected={focused}
       accessibilityLabel={accessibilityLabel ?? meta.label}
+      testID={testID}
       style={styles.tabItem}
       hitSlop={6}
     >
@@ -84,6 +92,7 @@ const TabItem = memo(function TabItem({
           labelStyle,
         ]}
         numberOfLines={1}
+        maxFontSizeMultiplier={1.5}
       >
         {meta.label}
       </Animated.Text>
@@ -93,21 +102,21 @@ const TabItem = memo(function TabItem({
 
 export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const onHeightChange = useContext(BottomTabBarHeightCallbackContext);
   const barWidth = useSharedValue(0);
   const index = useSharedValue(state.index);
   const tabCount = state.routes.length;
 
   useEffect(() => {
-    if (index.value === state.index) return;
-    index.value = withSpring(state.index, SPRING);
+    index.set(withSpring(state.index, SPRING));
   }, [state.index, index]);
 
   const onBarLayout = (e: LayoutChangeEvent) => {
-    barWidth.value = e.nativeEvent.layout.width;
+    barWidth.set(e.nativeEvent.layout.width);
   };
 
   const indicatorStyle = useAnimatedStyle(() => {
-    const w = barWidth.value;
+    const w = barWidth.get();
     if (w <= 0 || tabCount <= 0) return { opacity: 0 };
     const slot = w / tabCount;
     const pillW = Math.min(56, slot * 0.72);
@@ -116,7 +125,7 @@ export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarP
       width: pillW,
       transform: [
         {
-          translateX: index.value * slot + (slot - pillW) / 2,
+          translateX: index.get() * slot + (slot - pillW) / 2,
         },
       ],
     };
@@ -125,27 +134,34 @@ export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarP
   const bottomPad = Math.max(insets.bottom, 8);
 
   return (
-    <View style={[styles.wrap, { paddingBottom: bottomPad }]}>
+    <View
+      pointerEvents="box-none"
+      style={[styles.wrap, {
+        paddingBottom: bottomPad,
+        paddingLeft: Math.max(insets.left, 8),
+        paddingRight: Math.max(insets.right, 8),
+      }]}
+      onLayout={(event) => onHeightChange?.(event.nativeEvent.layout.height)}
+    >
       <View style={styles.bar} onLayout={onBarLayout}>
-        <Animated.View style={[styles.indicator, indicatorStyle]} />
+        <Animated.View pointerEvents="none" style={[styles.indicator, indicatorStyle]} />
         {state.routes.map((route, routeIndex) => {
           const { options } = descriptors[route.key];
           const focused = state.index === routeIndex;
 
           const onPress = () => {
-            // Move the pill on the UI thread before the screen mounts or any
-            // in-flight fetch applies its result.
-            index.value = routeIndex;
             const event = navigation.emit({
               type: 'tabPress',
               target: route.key,
               canPreventDefault: true,
             });
             if (event.defaultPrevented) {
-              index.value = withSpring(state.index, SPRING);
               return;
             }
             if (!focused) {
+              // Start on the UI thread before the destination mounts. Assigning
+              // the raw index here used to skip the indicator's spring entirely.
+              index.set(withSpring(routeIndex, SPRING));
               navigation.navigate(route.name, route.params);
             }
           };
@@ -165,6 +181,7 @@ export function AnimatedTabBar({ state, descriptors, navigation }: BottomTabBarP
               onPress={onPress}
               onLongPress={onLongPress}
               accessibilityLabel={options.tabBarAccessibilityLabel}
+              testID={options.tabBarButtonTestID}
             />
           );
         })}

@@ -11,6 +11,7 @@ import { AuthProvider } from './src/contexts/AuthContext';
 import { ToastProvider } from './src/contexts/ToastContext';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { GlassProvider } from './src/components/glass-surface';
 
 export default function App() {
   try {
@@ -20,14 +21,16 @@ export default function App() {
           <ThemeProvider>
             <AuthProvider>
               <ToastProvider>
-                <NavigationContainer
-                  theme={{
-                    ...DarkTheme,
-                    colors: { ...DarkTheme.colors, background: '#000000' },
-                  }}
-                >
-                  <RootNavigator />
-                </NavigationContainer>
+                <GlassProvider>
+                  <NavigationContainer
+                    theme={{
+                      ...DarkTheme,
+                      colors: { ...DarkTheme.colors, background: '#000000' },
+                    }}
+                  >
+                    <RootNavigator />
+                  </NavigationContainer>
+                </GlassProvider>
               </ToastProvider>
             </AuthProvider>
           </ThemeProvider>

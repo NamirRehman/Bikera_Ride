@@ -5,6 +5,7 @@ import { Principal } from '@dfinity/principal';
 import { colors } from '../theme/tokens';
 import { getBikeraImeraActor } from '../utils/actors';
 import { formatImeraE8s } from '../utils/format';
+import { GlassSurface } from './glass-surface';
 
 type Entry = {
   id: string;
@@ -107,7 +108,7 @@ export const WalletSummary = memo(function WalletSummary({
   }, [load, refreshKey]);
 
   return (
-    <View style={styles.card}>
+    <GlassSurface style={styles.card}>
       <View style={styles.header}>
         <Text style={styles.title}>Wallet</Text>
         <Pressable onPress={onOpenWallet} style={styles.openButton} accessibilityRole="button">
@@ -144,7 +145,7 @@ export const WalletSummary = memo(function WalletSummary({
           </View>
         ))
       )}
-    </View>
+    </GlassSurface>
   );
 });
 

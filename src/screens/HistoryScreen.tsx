@@ -21,6 +21,7 @@ import { GuestBanner } from '../components/GuestBanner';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { PressableScale } from '../components/motion';
 import { formatDistanceKm, formatImera, formatXP } from '../utils/formatStats';
+import { VerifiedRidesPanel } from '../components/verified-rides-panel';
 
 interface RideHistory {
   id: string;
@@ -100,6 +101,7 @@ export function HistoryScreen() {
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('year');
   const [refreshing, setRefreshing] = useState(false);
+  const [evidenceRefresh, setEvidenceRefresh] = useState(0);
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const publishRides = useRef<(rides: RideHistory[]) => void>(() => {});
   const historyGen = useRef(0);
@@ -198,6 +200,7 @@ export function HistoryScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    setEvidenceRefresh((value) => value + 1);
     setHistoryLimit(HISTORY_PAGE_SIZE);
     await refetch();
     setRefreshing(false);
@@ -313,6 +316,7 @@ export function HistoryScreen() {
     <View style={styles.listHeader}>
       <SectionHeader title="Ride History" subtitle="Track your progress and achievements" />
       <GuestBanner compact message="Guest rides stay on this device and are not listed here until you sign in." />
+      <VerifiedRidesPanel refreshKey={evidenceRefresh} />
 
       <View style={styles.summaryContainer}>
         <Card style={styles.summaryCard}>
@@ -408,7 +412,7 @@ export function HistoryScreen() {
         </ScrollView>
       </View>
     </View>
-  ), [totalStats, filter, timeFilter]);
+  ), [totalStats, filter, timeFilter, evidenceRefresh]);
 
   const listFooter = useMemo(
     () => (

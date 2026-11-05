@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -10,10 +10,11 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { useAuth } from '../contexts/AuthContext';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { colors, radii } from '../theme/tokens';
-import { webAppPage } from '../config';
 import { matchBikeQr, type QrMatch, type QrOperator } from '../services/bikeQr';
 import { OPERATOR_PRESETS } from '../services/operatorPresets';
-import { listActiveOperators, recordHandoff } from '../services/mobility';
+import { listActiveOperators } from '../services/mobility';
+import { usePartnerHandoff } from '../hooks/usePartnerHandoff';
+import { useNavigation } from '@react-navigation/native';
 
 /**
  * Scan the QR code on a partner bike. Bikera only ever opens a link whose host belongs to a known
@@ -21,8 +22,10 @@ import { listActiveOperators, recordHandoff } from '../services/mobility';
  * and then opens the operator's app or site to unlock and pay.
  */
 export function ScanBikeScreen() {
+  const navigation = useNavigation<any>();
+  const openHandoff = usePartnerHandoff();
   const { principal, getIdentity } = useAuth();
-  const { error: showError, info } = useToastHelpers();
+  const { error: showError } = useToastHelpers();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [registered, setRegistered] = useState<QrOperator[]>([]);
@@ -82,17 +85,11 @@ export function ScanBikeScreen() {
     if (!match || match.kind !== 'partner') return;
     setOpening(true);
     try {
-      if (connected && principal && systemId) {
-        const identity = getIdentity();
-        if (identity) await recordHandoff(identity, { operatorId: match.operator.id, systemId });
-      } else if (connected && !principal) {
-        info('Not signed in', 'Sign in so rides you take after scanning are credited to your Bikera account.');
-      }
+      await openHandoff(match.url, connected && systemId ? { operatorId: match.operator.id, systemId } : undefined);
     } catch (err) {
-      info('Opening anyway', err instanceof Error ? err.message : 'This ride will not be credited.');
+      showError('Could not open operator', err instanceof Error ? err.message : 'Try again.');
     } finally {
       setOpening(false);
-      Linking.openURL(match.url).catch(() => showError('Could not open', match.url));
     }
   };
 
@@ -184,7 +181,7 @@ export function ScanBikeScreen() {
       ) : null}
 
       <Pressable
-        onPress={() => Linking.openURL(webAppPage('ride-partners')).catch(() => {})}
+        onPress={() => navigation.navigate('PartnerBikes')}
         accessibilityRole="link"
         style={styles.linkWrap}
       >

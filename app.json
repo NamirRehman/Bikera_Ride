@@ -38,7 +38,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bikera.app",
-      "buildNumber": "1",
+      "buildNumber": "4",
       "icon": "./assets/icon.png",
       "splash": {
         "image": "./assets/icon.png",
@@ -54,11 +54,7 @@
         "NSMotionUsageDescription": "This app uses motion sensors to detect and track bike rides.",
         "NSPhotoLibraryUsageDescription": "This app uses photo library to select profile pictures.",
         "NSPhotoLibraryAddUsageDescription": "This app needs permission to save photos to your photo library.",
-        "NSUserTrackingUsageDescription": "This app uses tracking to provide personalized ride tracking and social features.",
         "UIBackgroundModes": [
-          "location",
-          "fetch",
-          "remote-notification",
           "location",
           "fetch",
           "remote-notification"
@@ -68,7 +64,6 @@
       "usesIcloudStorage": false,
       "usesAppleSignIn": false,
       "associatedDomains": [
-        "applinks:bikera.app",
         "applinks:bikera.app"
       ]
     },
@@ -103,7 +98,6 @@
         "android.permission.CAMERA"
       ],
       "blockedPermissions": [
-        "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_EXTERNAL_STORAGE",

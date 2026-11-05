@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radii } from '../theme/tokens';
 import { XpTokenIcon } from './XpTokenIcon';
+import { GlassSurface } from './glass-surface';
 
 const imeraLogo = require('../../assets/imera-token.png');
 
@@ -16,7 +17,7 @@ export const StatsHero = memo(function StatsHero({
   imera?: string;
 }) {
   return (
-    <View style={styles.container}>
+    <GlassSurface style={styles.container}>
       <Text style={styles.heading}>Your stats</Text>
       <View style={styles.row}>
         <View style={styles.cell}>
@@ -49,7 +50,7 @@ export const StatsHero = memo(function StatsHero({
           <Text style={styles.label}>iMERA</Text>
         </View>
       </View>
-    </View>
+    </GlassSurface>
   );
 });
 

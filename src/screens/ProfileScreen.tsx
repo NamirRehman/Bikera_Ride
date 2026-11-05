@@ -19,6 +19,8 @@ import { useToastHelpers } from '../contexts/ToastContext';
 import { WalletScreen } from './WalletScreen';
 import { WEB_APP_URL } from '../config';
 import { GuestBanner } from '../components/GuestBanner';
+import { eraseRiderAccount } from '../services/accountData';
+import { useNavigation } from '@react-navigation/native';
 import { applyCountryTag, parseCountryFromBio, stripCountryTag, getStoredCountry, saveUserCountry, clearUserCountry, COUNTRY_OPTIONS, countryName, countryFlag } from '../services/userCountry';
 
 function SettingRow({ icon, label, value, onPress, isDestructive = false, rightComponent }: any) {
@@ -39,6 +41,7 @@ function SettingRow({ icon, label, value, onPress, isDestructive = false, rightC
 }
 
 export function ProfileScreen() {
+  const navigation = useNavigation<any>();
   const { principal, username: authUsername, logout, getIdentity, isGuest, exitGuestMode } = useAuth();
   const { mode, setMode } = useTheme();
   const { success, error, info } = useToastHelpers();
@@ -383,97 +386,37 @@ export function ProfileScreen() {
   };
 
   const handleDeleteAccount = async () => {
-    logger.log('[PROFILE] handleDeleteAccount called, confirmation:', deleteConfirmation);
-
+    if (isDeleting) return;
     if (deleteConfirmation !== 'DELETE') {
-      logger.log('[PROFILE] Confirmation text does not match DELETE');
-      error('Configuration Required', 'Please type DELETE to confirm');
+      error('Confirmation Required', 'Please type DELETE to confirm');
       return;
     }
-
-    // Proceed directly with deletion - the "DELETE" confirmation is sufficient
-    // Nested Alert.alert doesn't work well on mobile when already in a modal
-    logger.log('[PROFILE] Confirmation verified, proceeding with deletion');
-
     try {
       setIsDeleting(true);
       const identity = getIdentity();
       if (!identity || !principal) {
-        console.error('[PROFILE] No identity or principal found');
         error('Authentication Error', 'Please authenticate first');
-        setIsDeleting(false);
         return;
       }
-
-      logger.log('[PROFILE] Calling eraseUserDataGDPR with principal:', principal);
-      const userActor = getBikeraUserActor({}, identity);
-
-      // Add timeout to prevent hanging
-      const deletePromise = userActor.eraseUserDataGDPR(Principal.fromText(principal));
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Delete operation timed out')), 30000)
-      );
-
-      const res: any = await Promise.race([deletePromise, timeoutPromise]);
-
-      logger.log('[PROFILE] eraseUserDataGDPR response:', res);
-
-      if (res && typeof res === 'object' && 'err' in res) {
-        console.error('[PROFILE] Delete failed with error:', res.err);
-        const errorMsg = String(res.err);
-        setIsDeleting(false);
-        setShowDeleteModal(false);
-        setDeleteConfirmation('');
-        // Use setTimeout to ensure modal is closed before showing alert
-        setTimeout(() => {
-          error('Error', errorMsg);
-        }, 300);
-      } else {
-        logger.log('[PROFILE] Account deleted successfully');
-        setIsDeleting(false);
-        setShowDeleteModal(false);
-        setDeleteConfirmation('');
-
-        // Logout to clear auth state - this will automatically trigger RootNavigator
-        // to switch to LandingScreen since isAuthenticated will become false
-        logger.log('[PROFILE] Logging out after account deletion');
-        try {
-          await logout();
-          logger.log('[PROFILE] Logout completed, RootNavigator should switch to LandingScreen');
-
-          // Show success message after a delay to ensure modal is closed
-          setTimeout(() => {
-            Alert.alert(
-              'Account Deleted',
-              'Your account has been successfully deleted. You will be redirected to the landing screen.',
-              [
-                {
-                  text: 'OK',
-                  onPress: () => {
-                    logger.log('[PROFILE] User acknowledged account deletion');
-                  },
-                },
-              ]
-            );
-          }, 500);
-        } catch (logoutError) {
-          console.error('[PROFILE] Logout error after deletion:', logoutError);
-          // Still try to show success message
-          setTimeout(() => {
-            success('Success', 'Your account has been deleted. Please restart the app.');
-          }, 300);
-        }
-      }
+      const { partnerError, localError } = await eraseRiderAccount(identity, principal);
+      setShowDeleteModal(false);
+      setDeleteConfirmation('');
+      let notice = 'Your profile and Bikera rides were erased.';
+      if (partnerError) notice += ` Partner-bike data could not be erased: ${partnerError} Contact Bikera support to finish deleting it.`;
+      else notice += ' Partner-bike data was erased.';
+      if (localError) notice += ` Local ride files could not be erased: ${localError} Remove them from Ride files on this device.`;
+      else notice += ' Your local ride files were removed from this device.';
+      try { await logout(); }
+      catch { notice += ' Please restart the app to finish signing out.'; }
+      // Wait for the confirmation modal to close before showing the result.
+      setTimeout(() => Alert.alert(partnerError || localError ? 'Deletion needs attention' : 'Account Deleted', notice), 500);
     } catch (e: any) {
       console.error('[PROFILE] Delete failed with exception:', e);
       const errorMsg = String(e?.message || e);
+      // Keep the confirmation draft open so a failed request can be retried.
+      error('Deletion not confirmed', errorMsg);
+    } finally {
       setIsDeleting(false);
-      setShowDeleteModal(false);
-      setDeleteConfirmation('');
-      // Use setTimeout to ensure modal is closed before showing alert
-      setTimeout(() => {
-        error('Error', errorMsg);
-      }, 300);
     }
   };
 
@@ -714,6 +657,13 @@ export function ProfileScreen() {
           </View>
 
           {/* Preferences */}
+          <Card>
+            <Text style={styles.sectionHeader}>Strava and ride files</Text>
+            <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>Strava import is paused. Export a Bikera ride as GPX and choose whether to upload it to Strava yourself. Bikera does not send your files to Strava.</Text>
+            <Pressable accessibilityRole="button" onPress={() => navigation.navigate('RideFiles')} style={{ paddingVertical: 14, minHeight: 44 }}>
+              <Text style={{ color: colors.brandPurple, fontWeight: '700' }}>Open ride files</Text>
+            </Pressable>
+          </Card>
           <View style={styles.section}>
             <Text style={styles.sectionHeader}>Preferences</Text>
             <Card style={{ padding: 0, overflow: 'hidden' }}>

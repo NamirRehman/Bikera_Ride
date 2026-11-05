@@ -1,18 +1,21 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { colors, radii, shadows } from '../theme/tokens';
+import { GlassSurface } from './glass-surface';
 
 export function Card({
   children,
   style,
+  glass = false,
 }: {
   children: React.ReactNode;
-  style?: object;
+  style?: StyleProp<ViewStyle>;
+  glass?: boolean;
 }) {
   return (
-    <View style={StyleSheet.flatten([styles.card, style || {}])}>
+    <GlassSurface enabled={glass} style={[styles.card, style]}>
       <View style={styles.inner}>{children}</View>
-    </View>
+    </GlassSurface>
   );
 }
 

@@ -20,4 +20,5 @@ export type MoreStackParamList = {
   Profile: undefined;
   RideFiles: undefined;
   ScanBike: undefined;
+  PartnerBikes: undefined;
 };

@@ -6,6 +6,10 @@
 // Using direct string since import.meta.env is not available in React Native context without extra setup
 export const SHADOW_WORKER_URL = 'https://bikerashadowworkers-production.up.railway.app';
 
+// Public connector URL from BikApp b4c7d4c. Expo requires a literal env lookup.
+export const MOBILITY_CONNECTOR_URL = (process.env.EXPO_PUBLIC_MOBILITY_CONNECTOR_URL ||
+  'https://bikapp-production.up.railway.app').trim().replace(/\/+$/, '');
+
 // Primary web experience for account actions that are intentionally out of scope on mobile v1.
 // bikera.cloud is the marketing site; the web app itself lives at app.bikera.cloud.
 export const WEB_APP_URL = 'https://app.bikera.cloud';

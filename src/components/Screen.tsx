@@ -5,6 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BikeraBackground } from './BikeraBackground';
 import { AppHeader } from './AppHeader';
 import { FocusReveal } from './motion';
+import { useNativeTabLayout } from '../navigation/native-tab-layout';
+import { NativeTabSafeArea } from './native-tab-safe-area';
 
 type ScreenProps = {
   children: React.ReactNode;
@@ -27,6 +29,8 @@ export function Screen({
   animate = false,
 }: ScreenProps) {
   const insets = useSafeAreaInsets();
+  const nativeTabs = useNativeTabLayout();
+  const Content = nativeTabs && !scroll ? NativeTabSafeArea : View;
   const incoming = contentStyle ?? (typeof contentClassName === 'string' ? undefined : contentClassName);
   const resolvedContentStyle = incoming
     ? RNStyleSheet.flatten(incoming)
@@ -41,11 +45,12 @@ export function Screen({
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface1 }}>
       <BikeraBackground />
-      <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: scroll ? 0 : insets.bottom }}>
+      <Content style={{ flex: 1, paddingTop: insets.top, paddingBottom: scroll || nativeTabs ? 0 : insets.bottom }}>
         {showHeader && <AppHeader />}
         {scroll ? (
           <ScrollView
-            contentContainerStyle={{ paddingTop: 8, paddingBottom: Math.max(insets.bottom, 24) + 88 }}
+            contentInsetAdjustmentBehavior={nativeTabs ? 'automatic' : 'never'}
+            contentContainerStyle={{ paddingTop: 8, paddingBottom: nativeTabs ? 24 : Math.max(insets.bottom, 24) + 88 }}
             style={{ flex: 1 }}
             refreshControl={refreshControl}
             keyboardShouldPersistTaps="handled"
@@ -56,7 +61,7 @@ export function Screen({
         ) : (
           <View style={[resolvedContentStyle, { flex: 1 }]}>{body}</View>
         )}
-      </View>
+      </Content>
     </View>
   );
 }

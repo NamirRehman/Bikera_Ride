@@ -8,6 +8,7 @@ import type { AppTabsParamList, MoreStackParamList } from './types';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AnimatedTabBar } from '../components/AnimatedTabBar';
 import { rideAutoStart } from '../services/rideAutoStart';
+import { NativeAppTabs, NATIVE_TABS_SUPPORTED } from './native-app-tabs';
 
 /** Must return JSX — React Navigation calls tabBar as a render fn, not as a component. */
 function renderTabBar(props: BottomTabBarProps) {
@@ -24,6 +25,7 @@ const getWalletScreen = () => require('../screens/WalletScreen').WalletScreen;
 const getProfileScreen = () => require('../screens/ProfileScreen').ProfileScreen;
 const getRideFilesScreen = () => require('../screens/RideFilesScreen').RideFilesScreen;
 const getScanBikeScreen = () => require('../screens/ScanBikeScreen').ScanBikeScreen;
+const getPartnerBikesScreen = () => require('../screens/PartnerBikesScreen').PartnerBikesScreen;
 
 const Tab = createBottomTabNavigator<AppTabsParamList>();
 const MoreStack = createNativeStackNavigator<MoreStackParamList>();
@@ -51,6 +53,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Profile" getComponent={getProfileScreen} />
       <MoreStack.Screen name="RideFiles" getComponent={getRideFilesScreen} />
       <MoreStack.Screen name="ScanBike" getComponent={getScanBikeScreen} />
+      <MoreStack.Screen name="PartnerBikes" getComponent={getPartnerBikesScreen} />
     </MoreStack.Navigator>
   );
 }
@@ -74,6 +77,10 @@ export function AppTabs() {
 
   if (!bootReady) {
     return <View style={styles.boot} />;
+  }
+
+  if (NATIVE_TABS_SUPPORTED) {
+    return <NativeAppTabs initialRouteName={initialRoute} MoreStack={MoreStackNavigator} />;
   }
 
   return (

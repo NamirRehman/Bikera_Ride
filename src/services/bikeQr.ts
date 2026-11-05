@@ -15,7 +15,7 @@ export interface QrOperator {
  * extend this when an operator shares its QR format.
  */
 export const QR_HOST_ALIASES: Record<string, string[]> = {
-  donkey_republic: ['donkey.bike'],
+  donkey_republic: ['donkey.bike', 'dnky.bike'],
   dott: ['ridedott.com'],
   lime: ['lime.bike', 'li.me'],
   nextbike: ['nextbike.net', 'nextbike.de'],

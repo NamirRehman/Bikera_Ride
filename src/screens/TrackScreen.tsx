@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Text, View, StyleSheet, TouchableOpacity, Dimensions, Alert, Platform, Modal, Pressable, Animated, Switch, AppState, type AppStateStatus } from 'react-native';
+import { Text, View, StyleSheet, TouchableOpacity, Dimensions, Alert, Platform, Modal, Pressable, Animated, Switch, ScrollView, AppState, type AppStateStatus } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
@@ -67,6 +67,14 @@ export function TrackScreen() {
   const { success, error, info, warning } = useToastHelpers();
   const canTrack = !!principal && !isGuest;
   const [isTracking, setIsTracking] = useState(false);
+  // Like the web app, sharing is opt-in for each mounted recording session.
+  // Freeze the choice at Start; timers and GPS callbacks read this same value.
+  const [shareWithBikera, setShareWithBikera] = useState(false);
+  const shareConsentRef = useRef(false);
+  const [savedLocallyOnly, setSavedLocallyOnly] = useState(false);
+  const [localRouteSaved, setLocalRouteSaved] = useState(false);
+  const [savingLocalRoute, setSavingLocalRoute] = useState(false);
+  const savingLocalRouteRef = useRef(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -194,7 +202,7 @@ export function TrackScreen() {
       }
 
       // Flush GPS batcher on unmount if tracking was active
-      if (isTrackingRef.current) {
+      if (isTrackingRef.current && shareConsentRef.current) {
         const batcher = getGPSPointBatcher();
         if (batcher.getQueueSize() > 0) {
           batcher.forceFlush().catch((error) => {
@@ -245,6 +253,7 @@ export function TrackScreen() {
 
   // Start activity session on canister
   const startSessionOnCanister = useCallback(async (): Promise<void> => {
+    if (!shareConsentRef.current) return;
     try {
       if (!principal) {
         throw new Error('No principal available');
@@ -326,6 +335,7 @@ export function TrackScreen() {
     speed?: number,
     heading?: number
   ) => {
+    if (!shareConsentRef.current) return;
     try {
       const pText = principal;
       if (!pText) {
@@ -364,6 +374,7 @@ export function TrackScreen() {
     avgSpeedKmh: number,
     routePoints: Array<{ latitude: number; longitude: number; timestamp: number; accuracy?: number }>
   ): Promise<boolean> => {
+    if (!shareConsentRef.current) return false;
     try {
       const sessionId = sessionIdRef.current;
       if (!sessionId) return false;
@@ -379,7 +390,7 @@ export function TrackScreen() {
       const backendRoutePoints = routePoints.map((point) => ({
         latitude: point.latitude,
         longitude: point.longitude,
-        timestamp: BigInt(point.timestamp * 1_000_000), // ms -> ns
+        timestamp: BigInt(Math.floor(point.timestamp)) * 1_000_000n,
         accuracy: point.accuracy ? [point.accuracy] : [],
         altitude: [],
         heading: [],
@@ -441,6 +452,7 @@ export function TrackScreen() {
   // Flush cached ride data to backend (first flush after 2.5 min, or end flush on stop)
   // Defined here so it can be used in handleLocationUpdate
   const flushRideDataToBackend = useCallback(async (isEndFlush: boolean = false) => {
+    if (!shareConsentRef.current) return;
     // End flush must wait for an in-flight first flush; soft flushes can skip
     if (sendInFlightRef.current) {
       if (!isEndFlush) {
@@ -553,6 +565,7 @@ export function TrackScreen() {
 
   // End activity session on canister
   const endSessionOnCanister = useCallback(async (): Promise<void> => {
+    if (!shareConsentRef.current) return;
     const sessionId = sessionIdRef.current;
     try {
       if (!sessionId) return;
@@ -623,7 +636,7 @@ export function TrackScreen() {
   useEffect(() => {
     const onChange = (next: AppStateStatus) => {
       if (next !== 'background' && next !== 'inactive') return;
-      if (!isTrackingRef.current || isPausedRef.current) return;
+      if (!isTrackingRef.current || isPausedRef.current || !shareConsentRef.current) return;
       if (!principal) return;
       void flushRideDataRef.current(false);
       try {
@@ -728,7 +741,7 @@ export function TrackScreen() {
     const cached = cachedRideDataRef.current;
 
     // Initialize cache on first GPS update (or re-initialize after first flush reset)
-    if (cached.firstCacheTime === 0) {
+    if (shareConsentRef.current && cached.firstCacheTime === 0) {
       cached.firstCacheTime = ts;
       cached.lastUpdateTime = ts;
       if (cached.firstFlushSent) {
@@ -806,10 +819,10 @@ export function TrackScreen() {
   // This is CRITICAL for mining participation - allows 0 distance (active tracking = eligible)
   useEffect(() => {
     // Check both state and refs - refs for immediate callback access, state for effect dependency
-    if (isTracking && !isPaused && principal) {
+    if (isTracking && !isPaused && principal && shareConsentRef.current) {
       const activityInterval = setInterval(async () => {
         // Double-check with refs inside interval (state might be stale in closure)
-        if (!isTrackingRef.current || isPausedRef.current) {
+        if (!isTrackingRef.current || isPausedRef.current || !shareConsentRef.current) {
           return;
         }
 
@@ -867,8 +880,18 @@ export function TrackScreen() {
       return;
     }
 
+    if (fullRouteRef.current.length >= 2 && !isTrackingRef.current) {
+      rideAutoStart.endStart();
+      setShowSuccessModal(true);
+      warning('Save the previous route first', 'The route is still in memory. Retry saving it before starting another ride.');
+      return;
+    }
+
     setGpsError(null);
     setIsStarting(true);
+    shareConsentRef.current = shareWithBikera;
+    sessionIdRef.current = null;
+    setLocalRouteSaved(false);
 
     try {
       // Request permissions if needed
@@ -902,7 +925,7 @@ export function TrackScreen() {
       }
 
       let sessionStarted = false;
-      if (principal) {
+      if (principal && shareConsentRef.current) {
         try {
           await startSessionOnCanister();
           sessionStarted = !!sessionIdRef.current;
@@ -1044,7 +1067,7 @@ export function TrackScreen() {
       setIsStarting(false);
       rideAutoStart.endStart();
     }
-  }, [addLog, canTrack, error, warning, principal, startSessionOnCanister, handleLocationUpdate]);
+  }, [addLog, canTrack, error, warning, principal, shareWithBikera, startSessionOnCanister, handleLocationUpdate]);
 
   handleStartRef.current = handleStart;
 
@@ -1124,9 +1147,9 @@ export function TrackScreen() {
     // Show confirmation alert first
     Alert.alert(
       'Stop Tracking?',
-      principal
+      principal && shareConsentRef.current
         ? `Stop this ride and save:\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\n• ${session.maxSpeed.toFixed(1)} km/h max speed`
-        : `Stop this guest ride?\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\nGuest rides are not saved to your account.`,
+        : `Stop and save on this device?\n• ${session.distance.toFixed(2)} km\n• ${formatTime(session.duration)}\nThis ride is not shared with Bikera and does not earn XP or rewards.`,
       [
         {
           text: 'Cancel',
@@ -1144,14 +1167,32 @@ export function TrackScreen() {
     );
   };
 
+  const persistLocalRoute = async () => {
+    if (savingLocalRouteRef.current) return;
+    const route = fullRouteRef.current;
+    if (route.length < 2) throw new Error('At least two GPS points are needed to save an exportable route.');
+    savingLocalRouteRef.current = true;
+    setSavingLocalRoute(true);
+    try {
+      await saveLocalRide(rideFromPoints(`Bikera ride ${new Date(route[0].timestampMs).toLocaleString()}`, route), principal || '');
+      fullRouteRef.current = [];
+      setLocalRouteSaved(true);
+    } finally {
+      savingLocalRouteRef.current = false;
+      setSavingLocalRoute(false);
+    }
+  };
+
   // Perform the actual stop operation
   const performStop = async () => {
     isStoppingRef.current = true;
     setIsStopping(true);
-    if (principal) {
+    const shared = shareConsentRef.current;
+    setSavedLocallyOnly(!shared);
+    if (principal && shared) {
       info('Saving your ride...', 'Please wait while we save your ride data.');
     } else {
-      info('Ride finished', 'Guest rides are local for this session only — sign in to save rides.');
+      info('Ride finished', 'Saving the GPS route on this device only.');
     }
     
     // Store session data for success modal (ref is fresher than React state between 1Hz ticks)
@@ -1165,7 +1206,7 @@ export function TrackScreen() {
     setIsPaused(false);
 
     // Flush GPS point batcher + shadow worker final batch (matches BikApp Track.tsx)
-    try {
+    if (shared) try {
       const batcher = getGPSPointBatcher();
       if (batcher.getQueueSize() > 0) {
         addLog('info', `Flushing ${batcher.getQueueSize()} queued GPS points...`);
@@ -1176,7 +1217,7 @@ export function TrackScreen() {
       addLog('warn', 'Error flushing GPS points', error);
     }
 
-    if (principal) {
+    if (principal && shared) {
       try {
         const flushResult = await ShadowWorkerService.flushBatch(principal);
         if (flushResult.success && flushResult.submitted) {
@@ -1211,7 +1252,7 @@ export function TrackScreen() {
     }
 
     // Flush cached data to backend (end flush - second call) - matches web app pattern
-    if (principal) {
+    if (principal && shared) {
       const cached = cachedRideDataRef.current;
       addLog('info', `🛑 Stopping ride, sending END flush with ${cached.routePoints.length} points`);
       await flushRideDataToBackend(true);
@@ -1223,17 +1264,16 @@ export function TrackScreen() {
 
     // Keep the full route on this device so it can be exported as GPX (Ride Files).
     const route = fullRouteRef.current;
-    fullRouteRef.current = [];
     if (route.length >= 2) {
       try {
-        await saveLocalRide(
-          rideFromPoints(`Bikera ride ${new Date(route[0].timestampMs).toLocaleString()}`, route),
-          principal || ''
-        );
+        await persistLocalRoute();
         addLog('info', `Saved ${route.length} route points to Ride Files`);
       } catch (saveError) {
         addLog('warn', `Could not save route to Ride Files: ${String(saveError)}`);
+        error('Route not saved locally', 'The route is still in memory. Free some device storage and use Retry save route before closing the app.');
       }
+    } else {
+      info('No GPX route saved', 'At least two GPS points are needed to save an exportable route.');
     }
 
     // Clear cache after sending (matches web app)
@@ -1250,7 +1290,7 @@ export function TrackScreen() {
     };
 
     // Narrow invalidation after ride — Home + history, not every screen
-    if (principal) {
+    if (principal && shared) {
       await invalidateAfterRide(principal);
       addLog('info', 'Invalidated caches after ride completion');
     }
@@ -1308,7 +1348,8 @@ export function TrackScreen() {
 
   return (
     <Screen scroll={false} animate={false} contentStyle={{ paddingHorizontal: 0, paddingTop: 0, flex: 1 }}>
-      <View style={styles.container}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1 }}>
+      <View style={[styles.container, { minHeight: isTracking ? 480 : canTrack ? 650 : 480 }]}>
         {/* Header Overlay */}
         <View style={styles.headerOverlay}>
           <View style={styles.headerTopRow}>
@@ -1316,7 +1357,9 @@ export function TrackScreen() {
               <Text style={styles.headerTitle}>Ride</Text>
               {!principal || isGuest ? (
                 <Text style={styles.guestHint}>Guest — sign in to track rides</Text>
-              ) : null}
+              ) : (
+                <Text style={styles.guestHint}>{isTracking && shareConsentRef.current ? 'Shared with Bikera' : 'Private unless you choose to share'}</Text>
+              )}
             </View>
             <View style={styles.gpsIndicator}>
               <Ionicons name="cellular" size={14} color={getGpsStatusColor()} />
@@ -1447,6 +1490,21 @@ export function TrackScreen() {
         {/* Tips / Status Text */}
         {!isTracking && (
           <View style={styles.tipsContainer}>
+            {canTrack ? (
+              <View style={styles.sharingChoice}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.autoStartTitle}>Share this ride with Bikera</Text>
+                  <Text style={styles.sharingHint}>Share GPS for validation, goals and rewards. Off keeps the ride on this device only.</Text>
+                </View>
+                <Switch
+                  value={shareWithBikera}
+                  onValueChange={setShareWithBikera}
+                  disabled={isStarting || isStopping}
+                  trackColor={{ false: 'rgba(255,255,255,0.15)', true: colors.brandBlue100 }}
+                  accessibilityLabel="Share this ride and GPS route with Bikera"
+                />
+              </View>
+            ) : null}
             <Text style={styles.tipsText}>
               {gpsError
                 ? `Error: ${gpsError}`
@@ -1491,7 +1549,7 @@ export function TrackScreen() {
             <View style={styles.loadingOverlay}>
               <View style={styles.loadingContent}>
                 <ThreeDotLoader color={colors.brandBlue100} size="large" />
-                <Text style={styles.loadingText}>{principal ? 'Saving your ride...' : 'Finishing ride...'}</Text>
+                <Text style={styles.loadingText}>{shareConsentRef.current ? 'Saving your ride...' : 'Saving on this device...'}</Text>
                 <Text style={styles.loadingSubtext}>Please wait</Text>
               </View>
             </View>
@@ -1519,10 +1577,23 @@ export function TrackScreen() {
                 </LinearGradient>
               </View>
               
-              <Text style={styles.successTitle}>{principal ? 'Ride Saved!' : 'Ride complete'}</Text>
+              <Text style={styles.successTitle}>{savedLocallyOnly ? 'Private ride complete' : 'Ride complete'}</Text>
               <Text style={styles.successSubtitle}>
-                {principal ? 'Your ride has been successfully recorded' : 'Guest ride finished. Sign in from More to save future rides to your account.'}
+                {savedLocallyOnly
+                  ? localRouteSaved ? 'Saved on this device. Export it from More → Ride files. This ride does not count toward goals or rewards.' : 'No route file was saved. This ride was not shared with Bikera.'
+                  : localRouteSaved ? 'GPS route saved in More → Ride files. Shared ride validation and rewards are processed separately.' : 'Shared ride finished. No local GPX route was saved.'}
               </Text>
+              {!localRouteSaved && fullRouteRef.current.length >= 2 ? (
+                <View>
+                  <TouchableOpacity accessibilityRole="button" disabled={savingLocalRoute} onPress={() => {
+                    void persistLocalRoute().catch((err) => error('Route not saved', String(err?.message || err)));
+                  }} style={{ padding: 14, minHeight: 44 }}><Text style={{ color: colors.brandPurple, fontWeight: '700', textAlign: 'center' }}>{savingLocalRoute ? 'Saving route…' : 'Retry save route'}</Text></TouchableOpacity>
+                  <TouchableOpacity accessibilityRole="button" disabled={savingLocalRoute} onPress={() => Alert.alert('Discard unsaved route?', 'This route has not been saved on the device and will not be exportable.', [
+                    { text: 'Keep route', style: 'cancel' },
+                    { text: 'Discard', style: 'destructive', onPress: () => { fullRouteRef.current = []; setShowSuccessModal(false); } },
+                  ])} style={{ padding: 14, minHeight: 44 }}><Text style={{ color: colors.error, textAlign: 'center' }}>Discard unsaved route</Text></TouchableOpacity>
+                </View>
+              ) : null}
 
               {savedSessionData && (
                 <View style={styles.successStatsContainer}>
@@ -1584,6 +1655,7 @@ export function TrackScreen() {
           </View>
         </Modal>
       </View>
+      </ScrollView>
     </Screen>
   );
 }
@@ -1780,6 +1852,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 24,
   },
+  sharingChoice: {
+    width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, marginBottom: 10, borderRadius: 16,
+    backgroundColor: colors.surfaceCard, borderWidth: 1, borderColor: colors.border1,
+  },
+  sharingHint: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 4 },
   autoStartRow: {
     flexDirection: 'row',
     alignItems: 'center',

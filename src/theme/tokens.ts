@@ -21,6 +21,8 @@ export const colors = {
   surface2: '#0A0A0A',
   surface3: '#111111',
   surfaceCard: '#0E0E0E',
+  glassTint: 'rgba(6, 7, 23, 0.16)',
+  glassBorder: 'rgba(255,255,255,0.18)',
 
   textPrimary: '#F4FBFF',
   textSecondary: '#D7E8F2',

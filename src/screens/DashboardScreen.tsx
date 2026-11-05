@@ -354,7 +354,7 @@ export function DashboardScreen() {
           </View>
 
           {transactions.length === 0 ? (
-            <Card style={styles.emptyActionsCard}>
+            <Card glass style={styles.emptyActionsCard}>
               <View style={styles.emptyActionsContent}>
                 <Ionicons name="receipt-outline" size={32} color={colors.textTertiary} />
                 <Text style={styles.emptyActionsTitle}>
@@ -368,7 +368,7 @@ export function DashboardScreen() {
               </View>
             </Card>
           ) : (
-            <Card style={styles.actionsListCard}>
+            <Card glass style={styles.actionsListCard}>
               {transactions.map((tx, idx) => (
                 <View
                   key={tx.id}

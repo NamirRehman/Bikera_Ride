@@ -43,9 +43,9 @@ const SECTIONS: { label: string; items: MenuItem[] }[] = [
     ],
   },
   {
-    label: 'On The Web',
+    label: 'Nearby',
     items: [
-      { title: 'Partner Bikes', icon: 'map', to: 'WebApp', webPath: 'ride-partners', color: colors.brandBlue300, subtitle: 'Shared bikes near you' },
+      { title: 'Partner Bikes', icon: 'map', to: 'PartnerBikes', color: colors.brandBlue300, subtitle: 'Nearby bikes, cities and partner rides' },
     ],
   },
   {
