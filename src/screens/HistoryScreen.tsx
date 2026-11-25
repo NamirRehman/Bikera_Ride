@@ -1,10 +1,9 @@
-import React, { startTransition, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Pressable, Text, View, StyleSheet, ScrollView, FlatList, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { Principal } from '@dfinity/principal';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
@@ -12,15 +11,14 @@ import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraValidatorActor } from '../utils/actors';
-import { fetchRideMatchRows } from '../services/rideMatch';
+import { fetchPeriodEarnings, fetchRideMatchRows, type RideMatchRow } from '../services/rideMatch';
+import type { RouteActivity, RouteSummary } from '../declarations/bikera_validator/bikera_validator.did';
 import { useCachedData } from '../hooks/useCachedData';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { ListSkeleton } from '../components/ListSkeleton';
-import { yieldToMain } from '../utils/yieldToMain';
 import { GuestBanner } from '../components/GuestBanner';
-import { useToastHelpers } from '../contexts/ToastContext';
 import { PressableScale } from '../components/motion';
-import { formatDistanceKm, formatImera, formatXP } from '../utils/formatStats';
+import { formatDistanceKm, formatImeraTokens, formatXP, rideDurationSeconds } from '../utils/formatStats';
 import { VerifiedRidesPanel } from '../components/verified-rides-panel';
 
 interface RideHistory {
@@ -40,12 +38,13 @@ type TimeFilter = 'week' | 'month' | 'year';
 
 // Limit canister responses so history loads quickly (load in small batches)
 const HISTORY_PAGE_SIZE = 20;
-const MIN_XP_TRANSACTIONS = 80;
-const MIN_REWARDS = 80;
+const PERIOD_DAYS = { week: 7, month: 30, year: 365 } as const;
+const ROUTE_ACTIVITY: Record<ActivityFilter, [] | [RouteActivity]> = {
+  all: [], walk: [{ Walk: null }], run: [{ Run: null }], bike: [{ Bike: null }],
+};
+type HistoryPage = { scope: string; rides: RideHistory[]; distance: number; hasMore: boolean };
 
-type TimedAmount = { time: number; amount: number; distance?: number };
-
-function lowerBound(items: TimedAmount[], target: number): number {
+function lowerBound(items: RideMatchRow[], target: number): number {
   let lo = 0;
   let hi = items.length;
   while (lo < hi) {
@@ -57,10 +56,10 @@ function lowerBound(items: TimedAmount[], target: number): number {
 }
 
 function sumWindow(
-  items: TimedAmount[],
+  items: RideMatchRow[],
   start: number,
   end: number,
-  accept?: (item: TimedAmount) => boolean
+  accept?: (item: RideMatchRow) => boolean
 ): number {
   let sum = 0;
   for (let i = lowerBound(items, start); i < items.length; i += 1) {
@@ -71,7 +70,7 @@ function sumWindow(
   return sum;
 }
 
-function mapRoute(r: any, xpEarned = 0, imeraEarned = 0): RideHistory {
+function mapRoute(r: RouteSummary, xpEarned = 0, imeraEarned = 0): RideHistory {
   const createdAt = Number(r.createdAt || 0n) / 1_000_000;
   const distance = Number(r.totalDistance || 0n);
   const avgSpeed = Number(r.avgSpeed || 0n);
@@ -84,7 +83,7 @@ function mapRoute(r: any, xpEarned = 0, imeraEarned = 0): RideHistory {
     id: String(r.routeId || ''),
     date: new Date(createdAt).toISOString(),
     distance: distance / 1000,
-    duration: Number(r.duration || 0n),
+    duration: rideDurationSeconds(r.duration),
     avgSpeed,
     maxSpeed: Number(r.maxSpeed || 0n),
     xpEarned: xpEarned > 0 ? xpEarned : calculatedXP,
@@ -96,115 +95,102 @@ function mapRoute(r: any, xpEarned = 0, imeraEarned = 0): RideHistory {
 export function HistoryScreen() {
   const navigation = useNavigation<any>();
   const { principal, isGuest } = useAuth();
-  const { error } = useToastHelpers();
-  const [previewRides, setPreviewRides] = useState<RideHistory[]>([]);
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('year');
   const [refreshing, setRefreshing] = useState(false);
   const [evidenceRefresh, setEvidenceRefresh] = useState(0);
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
-  const publishRides = useRef<(rides: RideHistory[]) => void>(() => {});
-  const historyGen = useRef(0);
-  publishRides.current = (next) => {
-    startTransition(() => setPreviewRides(next));
-  };
+  const [previousPage, setPreviousPage] = useState<HistoryPage | null>(null);
+  const historyScope = [principal, 'routes', timeFilter, filter].join(':');
 
-  const fetchHistoryData = useCallback(async (): Promise<RideHistory[]> => {
-    try {
-      const pText = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
-      if (!pText) {
-        return [];
-      }
-      const p = Principal.fromText(pText);
-
-      // Fetch route history and related data with limits (unbounded [] was very slow)
-      const gen = ++historyGen.current;
-      const validatorActor: any = getBikeraValidatorActor();
-      const routeLimit = historyLimit;
-      const xpLimit = Math.max(MIN_XP_TRANSACTIONS, historyLimit * 3);
-      const rewardsLimit = Math.max(MIN_REWARDS, historyLimit * 3);
-
-      // Summaries omit GPS points. Fall back until the validator upgrade is deployed.
-      let routeHistory: any[];
-      try {
-        routeHistory = await validatorActor.getUserRouteSummaries(p, [BigInt(routeLimit)]);
-      } catch (summaryErr) {
-        if (__DEV__) console.warn('[HISTORY] Route summary unavailable, loading full routes:', summaryErr);
-        routeHistory = await validatorActor.getUserRouteHistory(p, [BigInt(routeLimit)]);
-      }
-      const validRoutes = (routeHistory || [])
-        .filter((r: any) => r.isValid === true || r.isValid === 1)
-        .sort((a: any, b: any) => Number(b.createdAt || 0n) - Number(a.createdAt || 0n));
-
-      const estimated = validRoutes.map((r: any) => mapRoute(r));
-      if (historyGen.current === gen) publishRides.current(estimated);
-      await yieldToMain();
-
-      let xpEvents: TimedAmount[] = [];
-      let rewardEvents: TimedAmount[] = [];
-      try {
-        const matched = await fetchRideMatchRows(p, xpLimit, rewardsLimit);
-        xpEvents = matched.xp.sort((a, b) => a.time - b.time);
-        rewardEvents = matched.rewards.sort((a, b) => a.time - b.time);
-      } catch (matchErr) {
-        console.error('Failed to match ride rewards:', matchErr);
-        return estimated;
-      }
-
-      return validRoutes.map((r: any) => {
-        const createdAt = Number(r.createdAt || 0n) / 1_000_000;
-        const distance = Number(r.totalDistance || 0n);
-        const start = createdAt - 5 * 60 * 1000;
-        const end = createdAt + 5 * 60 * 1000;
-        const xpEarned = sumWindow(xpEvents, start, end, (tx) => {
-          if (tx.distance == null) return false;
-          return Math.abs(tx.distance - distance) <= distance * 0.1;
-        });
-        const imeraEarned = sumWindow(rewardEvents, start, end + 5 * 60 * 1000);
-        return mapRoute(r, xpEarned, imeraEarned);
-      });
-    } catch (e) {
-      console.error('Failed to fetch history:', e);
-      error('History Error', 'Failed to load your ride history.');
-      return [];
+  const fetchHistoryData = useCallback(async (): Promise<HistoryPage> => {
+    const snapshot: HistoryPage = { scope: historyScope, rides: [], distance: 0, hasMore: false };
+    if (!principal) return snapshot;
+    const rider = Principal.fromText(principal);
+    const sinceMs = Date.now() - PERIOD_DAYS[timeFilter] * 86_400_000;
+    const since: [bigint] = [BigInt(sinceMs) * 1_000_000n];
+    const validator = getBikeraValidatorActor();
+    const rows: RouteSummary[] = [];
+    let offset = 0;
+    let total = 0;
+    while (offset < historyLimit) {
+      const page = await validator.getUserRoutePage(
+        rider, since, ROUTE_ACTIVITY[filter], BigInt(offset), BigInt(Math.min(50, historyLimit - offset))
+      );
+      total = Number(page.total);
+      snapshot.distance = Number(page.totalDistance) / 1_000;
+      rows.push(...page.rows.filter((route) => route.isValid));
+      offset += page.rows.length;
+      if (!page.rows.length || offset >= total) break;
     }
-  }, [principal, historyLimit]);
+    snapshot.hasMore = offset < total;
+    if (!rows.length) return snapshot;
 
-  const { data: historyData, loading: historyLoading, refetch } = useCachedData({
+    const oldest = Number(rows[rows.length - 1].createdAt / 1_000_000n);
+    const newest = Number(rows[0].createdAt / 1_000_000n);
+    const matched = await fetchRideMatchRows(rider, oldest, newest);
+    const xp = matched.xp.sort((a, b) => a.time - b.time);
+    const rewards = matched.rewards.sort((a, b) => a.time - b.time);
+    snapshot.rides = rows.map((route) => {
+      const created = Number(route.createdAt / 1_000_000n);
+      const distance = Number(route.totalDistance);
+      const start = created - 5 * 60_000;
+      const end = created + 5 * 60_000;
+      const xpEarned = sumWindow(xp, start, end, (tx) =>
+        tx.distance !== undefined && Math.abs(tx.distance - distance) <= distance * 0.1
+      );
+      return mapRoute(route, xpEarned, sumWindow(rewards, start, end + 5 * 60_000));
+    });
+    return snapshot;
+  }, [principal, historyScope, historyLimit, filter, timeFilter]);
+
+  const { data: historyData, loading: historyLoading, refetch, error: historyError } = useCachedData({
     type: 'history',
-    identifier: principal ? `${principal}:${historyLimit}` : undefined,
+    identifier: [historyScope, historyLimit].join(':'),
     fetcher: fetchHistoryData,
     enabled: !!principal,
     tier: 'normal',
-    refetchOnForeground: false,
+    refetchOnFocus: true,
+    refetchOnForeground: true,
     minRefetchIntervalMs: 90_000,
   });
-
-  const rides = useMemo((): RideHistory[] => {
-    const source: RideHistory[] = historyData ?? previewRides;
+  const fetchEarnings = useCallback(async () => {
+    if (!principal) return null;
     const now = Date.now();
-    const timeFilterMs = {
-      week: 7 * 24 * 60 * 60 * 1000,
-      month: 30 * 24 * 60 * 60 * 1000,
-      year: 365 * 24 * 60 * 60 * 1000,
-    }[timeFilter] || Infinity;
-    const timeFiltered = source.filter((ride) => now - new Date(ride.date).getTime() <= timeFilterMs);
-    return filter === 'all' ? timeFiltered : timeFiltered.filter((ride) => ride.routeType === filter);
-  }, [historyData, previewRides, filter, timeFilter]);
+    return fetchPeriodEarnings(Principal.fromText(principal), now - PERIOD_DAYS[timeFilter] * 86_400_000, now);
+  }, [principal, timeFilter]);
+  const { data: earnings, refetch: refreshEarnings } = useCachedData({
+    type: 'history',
+    identifier: [principal, 'earnings', timeFilter].join(':'),
+    fetcher: fetchEarnings,
+    enabled: !!principal,
+    tier: 'normal',
+    refetchOnFocus: true,
+    refetchOnForeground: true,
+  });
 
-  const hasMore = (historyData ?? previewRides).length >= historyLimit;
+  useEffect(() => {
+    if (historyData?.scope === historyScope) setPreviousPage(historyData);
+  }, [historyData, historyScope]);
+
+  const page = historyData?.scope === historyScope ? historyData
+    : previousPage?.scope === historyScope ? previousPage : null;
+  const rides = page?.rides ?? [];
+  const hasMore = page?.hasMore ?? false;
 
   useEffect(() => {
     setHistoryLimit(HISTORY_PAGE_SIZE);
-  }, [timeFilter, principal]);
+  }, [principal, timeFilter, filter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setEvidenceRefresh((value) => value + 1);
-    setHistoryLimit(HISTORY_PAGE_SIZE);
-    await refetch();
-    setRefreshing(false);
-  }, [refetch]);
+    try {
+      await Promise.all([refetch(), refreshEarnings()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetch, refreshEarnings]);
 
   const handleLoadMore = useCallback(() => {
     if (!hasMore || historyLoading) return;
@@ -257,19 +243,6 @@ export function HistoryScreen() {
     }
   };
 
-  const totalStats = useMemo(
-    () =>
-      rides.reduce(
-        (acc: { distance: number; xp: number; imera: number }, ride: RideHistory) => ({
-          distance: acc.distance + ride.distance,
-          xp: acc.xp + ride.xpEarned,
-          imera: acc.imera + ride.imeraEarned,
-        }),
-        { distance: 0, xp: 0, imera: 0 }
-      ),
-    [rides]
-  );
-
   const isInitialLoading = historyLoading && rides.length === 0;
 
   const renderRideItem = useCallback(({ item }: { item: RideHistory }) => (
@@ -287,7 +260,7 @@ export function HistoryScreen() {
         <View style={styles.rideRewards}>
           <Text style={styles.xpText}>+{formatXP(item.xpEarned)} XP</Text>
           <Text style={styles.rewardSeparator}>•</Text>
-          <Text style={styles.imeraText}>+{formatImera(item.imeraEarned)} iMERA</Text>
+          <Text style={styles.imeraText}>+{formatImeraTokens(item.imeraEarned)} iMERA</Text>
         </View>
       </View>
 
@@ -315,7 +288,7 @@ export function HistoryScreen() {
   const listHeader = useMemo(() => (
     <View style={styles.listHeader}>
       <SectionHeader title="Ride History" subtitle="Track your progress and achievements" />
-      <GuestBanner compact message="Guest rides stay on this device and are not listed here until you sign in." />
+      <GuestBanner compact message="Guest and private rides stay on this device. Open Ride files to export them." />
       <VerifiedRidesPanel refreshKey={evidenceRefresh} />
 
       <View style={styles.summaryContainer}>
@@ -326,7 +299,7 @@ export function HistoryScreen() {
           >
             <Text style={styles.summaryLabel} numberOfLines={1}>Distance</Text>
             <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
-              {formatDistanceKm(totalStats.distance)}
+              {formatDistanceKm(page?.distance ?? 0)}
             </Text>
             <Text style={styles.summaryUnit}>km</Text>
           </LinearGradient>
@@ -338,7 +311,7 @@ export function HistoryScreen() {
           >
             <Text style={styles.summaryLabel} numberOfLines={1}>XP</Text>
             <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
-              {formatXP(totalStats.xp)}
+              {earnings ? formatXP(earnings.xp) : '—'}
             </Text>
             <Text style={styles.summaryUnit}>XP</Text>
           </LinearGradient>
@@ -350,7 +323,7 @@ export function HistoryScreen() {
           >
             <Text style={styles.summaryLabel} numberOfLines={1}>iMERA</Text>
             <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
-              {formatImera(totalStats.imera)}
+              {earnings ? formatImeraTokens(earnings.imera) : '—'}
             </Text>
             <Text style={styles.summaryUnit}>iMERA</Text>
           </LinearGradient>
@@ -412,7 +385,7 @@ export function HistoryScreen() {
         </ScrollView>
       </View>
     </View>
-  ), [totalStats, filter, timeFilter, evidenceRefresh]);
+  ), [page?.distance, earnings, filter, timeFilter, evidenceRefresh]);
 
   const listFooter = useMemo(
     () => (
@@ -452,7 +425,7 @@ export function HistoryScreen() {
               <Ionicons name="bicycle-outline" size={48} color={colors.textTertiary} style={styles.emptyIcon} />
               <Text style={styles.emptyText}>{isGuest ? 'No synced rides yet' : 'No rides yet'}</Text>
               <Text style={styles.emptySubtext}>
-                {isGuest ? 'Record a guest ride from Track, or sign in from More to sync history.' : 'Record your first ride to see it here'}
+                {isGuest ? 'Record a guest ride from Track, or sign in from More to sync history.' : historyError ? 'Could not load your history. Pull down to retry.' : 'Shared rides appear here after processing.'}
               </Text>
               <PressableScale
                 style={styles.emptyCtaButton}

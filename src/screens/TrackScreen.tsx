@@ -19,6 +19,9 @@ import { invalidateAfterRide } from '../utils/cacheHelpers';
 import { ShadowWorkerService } from '../services/ShadowWorkerService';
 import { getGPSPointBatcher } from '../services/gpsPointBatcher';
 import { submitSessionToJoinedPools } from '../services/poolRideSubmit';
+import { requireRiderIdentity } from '../services/integration-utils';
+import { saveSharedRide, type SharedRide } from '../services/sharedRide';
+import type { LocationPoint } from '../declarations/bikera_user/bikera_user.did';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { rideAutoStart } from '../services/rideAutoStart';
 import { rideFromPoints, saveLocalRide, type RidePoint } from '../services/rideFiles';
@@ -75,6 +78,10 @@ export function TrackScreen() {
   const [localRouteSaved, setLocalRouteSaved] = useState(false);
   const [savingLocalRoute, setSavingLocalRoute] = useState(false);
   const savingLocalRouteRef = useRef(false);
+  const pendingSharedRideRef = useRef<{ owner: string; ride: SharedRide } | null>(null);
+  const savingSharedRideRef = useRef(false);
+  const [savingSharedRide, setSavingSharedRide] = useState(false);
+  const [sharedRideStatus, setSharedRideStatus] = useState<'saved' | 'retry' | 'skipped' | 'noDistance' | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -108,8 +115,7 @@ export function TrackScreen() {
   const isPausedRef = useRef<boolean>(false);
   const isStoppingRef = useRef<boolean>(false);
   const handleStartRef = useRef<() => Promise<void>>(async () => {});
-  const flushRideDataRef = useRef<(isEndFlush?: boolean) => Promise<void>>(async () => {});
-  const endSessionRef = useRef<() => Promise<void>>(async () => {});
+  const flushRideDataRef = useRef<() => Promise<void>>(async () => {});
 
   // Caching mechanism (matching web app pattern)
   const cachedRideDataRef = useRef<{
@@ -121,7 +127,6 @@ export function TrackScreen() {
     firstCacheTime: number;
     lastUpdateTime: number;
     firstFlushSent: boolean;
-    endFlushSent: boolean;
   }>({
     distance: 0,
     maxSpeed: 0,
@@ -131,11 +136,10 @@ export function TrackScreen() {
     firstCacheTime: 0,
     lastUpdateTime: 0,
     firstFlushSent: false,
-    endFlushSent: false,
   });
 
   const firstFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sendInFlightRef = useRef<boolean>(false);
+  const flushInFlightRef = useRef<Promise<void> | null>(null);
   const lastActivityPingRef = useRef<number>(0);
   const hasGpsFixRef = useRef(false);
   const currentPosRef = useRef<Location.LocationObject | null>(null);
@@ -259,13 +263,9 @@ export function TrackScreen() {
         throw new Error('No principal available');
       }
 
-      const identity = getIdentity();
-      if (!identity) {
-        throw new Error('No identity available');
-      }
-
+      const identity = requireRiderIdentity(getIdentity(), principal);
       const actor = getBikeraUserActor({}, identity);
-      const p = Principal.fromText(principal);
+      const p = identity.getPrincipal();
 
       addLog('info', 'Starting activity session', { principal });
 
@@ -311,7 +311,7 @@ export function TrackScreen() {
           });
 
           // Also ping user activity status (fire and forget) - matches web app
-          void (actor as any).recordUserActivity(p);
+          void actor.recordUserActivity(p).catch((e) => addLog('warn', 'Could not record activity', e));
         } catch (e) {
           addLog('warn', 'Consensus: Initial activity recording failed', e);
         }
@@ -367,278 +367,91 @@ export function TrackScreen() {
     }
   }, [principal]);
 
-  // Update session on canister (matches web app pattern)
-  const updateSessionOnCanister = useCallback(async (
-    totalDistanceMeters: number,
-    maxSpeedKmh: number,
-    avgSpeedKmh: number,
-    routePoints: Array<{ latitude: number; longitude: number; timestamp: number; accuracy?: number }>
-  ): Promise<boolean> => {
-    if (!shareConsentRef.current) return false;
-    try {
-      const sessionId = sessionIdRef.current;
-      if (!sessionId) return false;
-      if (!principal) return false;
-
-      const identity = getIdentity();
-      if (!identity) return false;
-
-      const actor = getBikeraUserActor({}, identity);
-      const p = Principal.fromText(principal);
-
-      // Convert route points to backend format
-      const backendRoutePoints = routePoints.map((point) => ({
-        latitude: point.latitude,
-        longitude: point.longitude,
-        timestamp: BigInt(Math.floor(point.timestamp)) * 1_000_000n,
-        accuracy: point.accuracy ? [point.accuracy] : [],
-        altitude: [],
-        heading: [],
-      }));
-
-      // Try batch update first; fallback sends ALL points (matches BikApp Track.tsx)
-      try {
-        if ((actor as any).updateActivitySessionWithPoints) {
-          await (actor as any).updateActivitySessionWithPoints(
-            sessionId,
-            Math.round(totalDistanceMeters),
-            Math.round(maxSpeedKmh),
-            Math.round(avgSpeedKmh),
-            backendRoutePoints,
-            p
-          );
-          addLog('info', `✅ Session updated with ${routePoints.length} route points`);
-        } else {
-          addLog('warn', 'updateActivitySessionWithPoints unavailable — fallback per-point');
-          for (const point of backendRoutePoints) {
-            await (actor as any).updateActivitySession(
-              sessionId,
-              Math.round(totalDistanceMeters),
-              Math.round(maxSpeedKmh),
-              Math.round(avgSpeedKmh),
-              [point],
-              p
-            );
-          }
-          addLog('info', `Session updated with ${routePoints.length} points (fallback)`);
-        }
-      } catch (batchErr) {
-        addLog('warn', 'Batch update failed, trying per-point fallback', batchErr);
-        try {
-          for (const point of backendRoutePoints) {
-            await (actor as any).updateActivitySession(
-              sessionId,
-              Math.round(totalDistanceMeters),
-              Math.round(maxSpeedKmh),
-              Math.round(avgSpeedKmh),
-              [point],
-              p
-            );
-          }
-          addLog('info', `Session updated with ${routePoints.length} points (fallback after error)`);
-        } catch (fallbackErr) {
-          addLog('warn', 'Session update failed', fallbackErr);
-          return false;
-        }
-      }
-
-      return true;
-    } catch (error) {
-      addLog('warn', 'updateSessionOnCanister failed', error);
-      return false;
-    }
-  }, [principal, getIdentity]);
-
-  // Flush cached ride data to backend (first flush after 2.5 min, or end flush on stop)
-  // Defined here so it can be used in handleLocationUpdate
-  const flushRideDataToBackend = useCallback(async (isEndFlush: boolean = false) => {
-    if (!shareConsentRef.current) return;
-    // End flush must wait for an in-flight first flush; soft flushes can skip
-    if (sendInFlightRef.current) {
-      if (!isEndFlush) {
-        addLog('debug', 'Flush already in flight, skipping');
-        return;
-      }
-      addLog('info', 'Waiting for in-flight flush before END flush…');
-      const waitStart = Date.now();
-      while (sendInFlightRef.current && Date.now() - waitStart < 15000) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      if (sendInFlightRef.current) {
-        addLog('warn', 'In-flight flush still busy — forcing END flush anyway');
-        sendInFlightRef.current = false;
-      }
-    }
-
+  // Periodically update the live session so shared distance is visible while riding.
+  const flushRideDataToBackend = useCallback(async () => {
+    const sessionId = sessionIdRef.current;
     const cached = cachedRideDataRef.current;
-
-    // Check if we've already sent both flushes
-    if (cached.firstFlushSent && cached.endFlushSent) {
-      addLog('debug', 'Both flushes already sent, skipping');
-      return;
-    }
-
-    // Check if this is first flush and it's already been sent
-    if (!isEndFlush && cached.firstFlushSent) {
-      addLog('debug', 'First flush already sent, skipping');
-      return;
-    }
-
-    // Check if this is end flush and it's already been sent
-    if (isEndFlush && cached.endFlushSent) {
-      addLog('debug', 'End flush already sent, skipping');
-      return;
-    }
-
-    // Don't send if no data cached
-    if (cached.totalDataPoints === 0 || cached.routePoints.length === 0) {
-      addLog('debug', 'No data to flush');
-      return;
-    }
-
-    sendInFlightRef.current = true;
-    addLog('info', `⚡ Flushing ${isEndFlush ? 'END' : 'FIRST'} batch`, {
-      distance: `${(cached.distance / 1000).toFixed(3)} km`,
-      maxSpeed: `${cached.maxSpeed.toFixed(1)} km/h`,
-      avgSpeed: `${cached.avgSpeed.toFixed(1)} km/h`,
-      points: cached.routePoints.length,
-    });
-
-    try {
-      const totals = sessionRef.current;
-      const totalDistanceMeters = Math.max(0, Math.round(totals.distance * 1000));
-
-      const updateSuccess = await updateSessionOnCanister(
-        totalDistanceMeters,
-        totals.maxSpeed,
-        totals.avgSpeed,
-        cached.routePoints
-      );
-
-      if (updateSuccess) {
-        // Record activity in consensus when flushing (allows 0 distance - active tracking = eligible)
-        try {
-          if (principal) {
-            const identity = getIdentity();
-            if (identity) {
-              const p = Principal.fromText(principal);
-              const consensusActor = getBikeraConsensusActor();
-              void (consensusActor as any).recordActivity(
-                p,
-                BigInt(totalDistanceMeters),
-                BigInt(Math.max(0, Math.round(totals.avgSpeed)))
-              );
-              addLog('debug', `Consensus: Activity recorded on flush (distance: ${totalDistanceMeters}m, speed: ${totals.avgSpeed}km/h)`);
-            }
-          }
-        } catch (e) {
-          addLog('warn', 'Consensus: Activity recording on flush failed', e);
-        }
-
-        if (isEndFlush) {
-          cachedRideDataRef.current.endFlushSent = true;
-          addLog('info', 'End flush sent successfully');
-        } else {
-          // After first flush succeeds, reset cache to start accumulating new data for end flush (matches web)
-          cachedRideDataRef.current.firstFlushSent = true;
-          addLog('info', 'First flush sent successfully, resetting cache for new data accumulation');
-
-          // Reset cache counters - firstCacheTime will be set to next GPS timestamp when it arrives
-          cachedRideDataRef.current.firstCacheTime = 0; // Will be re-initialized on next GPS update
-          cachedRideDataRef.current.distance = 0;
-          cachedRideDataRef.current.maxSpeed = 0;
-          cachedRideDataRef.current.avgSpeed = 0;
-          cachedRideDataRef.current.totalDataPoints = 0;
-          cachedRideDataRef.current.routePoints = [];
-        }
-      } else {
-        addLog('warn', 'Flush failed, will retry on next attempt');
+    if (!shareConsentRef.current || !sessionId || !principal || flushInFlightRef.current ||
+        cached.firstFlushSent || !cached.routePoints.length) return;
+    const identity = getIdentity();
+    if (!identity) return;
+    const rider = identity.getPrincipal();
+    if (rider.toText() !== principal) return;
+    const actor = getBikeraUserActor({}, identity);
+    const points: LocationPoint[] = cached.routePoints.map((point) => ({
+      latitude: point.latitude,
+      longitude: point.longitude,
+      timestamp: BigInt(Math.floor(point.timestamp)) * 1_000_000n,
+      accuracy: point.accuracy === undefined ? [] : [point.accuracy],
+    }));
+    const totals = sessionRef.current;
+    const meters = BigInt(Math.max(0, Math.round(totals.distance * 1000)));
+    const speed = BigInt(Math.max(0, Math.round(totals.avgSpeed)));
+    const flush = (async () => {
+      try {
+        const result = await actor.updateActivitySessionWithPoints(
+          sessionId, meters, BigInt(Math.max(0, Math.round(totals.maxSpeed))), speed, points, rider
+        );
+        if ('err' in result) throw new Error(result.err);
+        cached.firstFlushSent = true;
+        const lastSent = points[points.length - 1].timestamp;
+        cached.routePoints = cached.routePoints.filter((point) => BigInt(Math.floor(point.timestamp)) * 1_000_000n > lastSent);
+        void getBikeraConsensusActor().recordActivity(rider, meters, speed)
+          .catch((err) => addLog('warn', 'Could not record shared activity', err));
+      } catch (err) {
+        addLog('warn', 'Live ride update failed', err);
       }
-    } catch (error) {
-      addLog('error', 'Flush error', error);
+    })();
+    flushInFlightRef.current = flush;
+    try {
+      await flush;
     } finally {
-      sendInFlightRef.current = false;
+      if (flushInFlightRef.current === flush) flushInFlightRef.current = null;
     }
-  }, [updateSessionOnCanister, principal, getIdentity]);
+  }, [addLog, principal, getIdentity]);
 
   flushRideDataRef.current = flushRideDataToBackend;
 
-  // End activity session on canister
-  const endSessionOnCanister = useCallback(async (): Promise<void> => {
-    if (!shareConsentRef.current) return;
-    const sessionId = sessionIdRef.current;
+  const persistSharedRide = async () => {
+    const pending = pendingSharedRideRef.current;
+    if (!pending || savingSharedRideRef.current) return;
+    savingSharedRideRef.current = true;
+    setSavingSharedRide(true);
     try {
-      if (!sessionId) return;
-      if (!principal) return;
-
-      const identity = getIdentity();
-      if (!identity) return;
-
-      const actor = getBikeraUserActor({}, identity);
-      const p = Principal.fromText(principal);
-
-      addLog('info', 'Ending activity session', { sessionId });
-
-      const res = await (actor as any).endActivitySession(sessionId, p);
-
-      if (res && 'ok' in res) {
-        addLog('info', 'Session ended successfully');
-        success('Tracking saved', 'Your ride has been successfully recorded.');
-
-        // Award distance XP at session end using batch method (matches web app pattern)
-        try {
-          const xpActor = getBikeraXpActor({}, identity);
-          const totals = sessionRef.current;
-          const meters = Math.max(0, Math.round(totals.distance * 1000));
-
-          if (meters > 0) {
-            // Try batch method first (more efficient), fallback to regular method
-            if ((xpActor as any).addDistanceXPBatch) {
-              await (xpActor as any).addDistanceXPBatch(p, BigInt(meters));
-              addLog('info', `XP awarded: ${meters}m (batch method)`);
-            } else if ((xpActor as any).addDistanceXP) {
-              await (xpActor as any).addDistanceXP(p, BigInt(meters));
-              addLog('info', `XP awarded: ${meters}m (regular method)`);
-            } else {
-              addLog('warn', 'XP actor methods not available');
-            }
-          } else {
-            addLog('debug', 'No distance to award XP for');
-          }
-        } catch (e: any) {
-          addLog('warn', 'addDistanceXP failed', e);
-          // Don't throw - session ended successfully, XP failure is non-critical
+      const identity = requireRiderIdentity(getIdentity(), pending.owner);
+      const saved = await saveSharedRide(pending.ride, identity);
+      pendingSharedRideRef.current = null;
+      setSharedRideStatus(saved ? 'saved' : 'noDistance');
+      // The worker can match its confirmation to the existing finished session.
+      void ShadowWorkerService.flushBatch(pending.owner)
+        .catch((err) => addLog('warn', 'Ride confirmation flush failed', err));
+      if (!saved) return;
+      void (async () => {
+        const results = await Promise.allSettled([
+          getBikeraXpActor({}, identity).addDistanceXPBatch(identity.getPrincipal(), saved.distance)
+            .finally(() => invalidateAfterRide(pending.owner)),
+          submitSessionToJoinedPools(saved, identity),
+        ]);
+        const raceSync = results[1];
+        if (raceSync.status === 'rejected' || raceSync.value.failed) {
+          info('Ride saved', 'Some races could not sync. Open the race in Bikera Staking to submit this ride.');
         }
-
-        // Credit any Active race pools the rider has joined (staking Groups)
-        try {
-          const poolResult = await submitSessionToJoinedPools(sessionId, principal, identity);
-          if (poolResult.submitted > 0) {
-            addLog('info', `Submitted ride to ${poolResult.submitted} pool(s)`);
-          }
-        } catch (e: any) {
-          addLog('warn', 'Pool ride submit failed (non-critical)', e);
-        }
-      } else {
-        addLog('error', 'endActivitySession error', res);
-      }
-    } catch (e) {
-      addLog('error', 'Failed to end session', e);
-      error('Could not end session', 'An unexpected error occurred while saving your ride.');
+      })().catch((err) => addLog('warn', 'Post-ride sync failed', err));
+    } catch (err) {
+      setSharedRideStatus('retry');
+      addLog('warn', 'Could not save shared ride', err);
     } finally {
-      sessionIdRef.current = null;
+      savingSharedRideRef.current = false;
+      setSavingSharedRide(false);
     }
-  }, [principal, getIdentity, success, error]);
-
-  endSessionRef.current = endSessionOnCanister;
-
+  };
   // Mirror BikApp visibility flush: soft-flush ride cache when app backgrounds
   useEffect(() => {
     const onChange = (next: AppStateStatus) => {
       if (next !== 'background' && next !== 'inactive') return;
       if (!isTrackingRef.current || isPausedRef.current || !shareConsentRef.current) return;
       if (!principal) return;
-      void flushRideDataRef.current(false);
+      void flushRideDataRef.current();
       try {
         const batcher = getGPSPointBatcher();
         if (batcher.getQueueSize() > 0) {
@@ -756,7 +569,7 @@ export function TrackScreen() {
         firstFlushTimerRef.current = setTimeout(() => {
           const cachedData = cachedRideDataRef.current;
           addLog('info', `⏰ Timer fired after 150 seconds! Sending FIRST flush with ${cachedData.routePoints.length} points`);
-          void flushRideDataToBackend(false);
+          void flushRideDataToBackend();
           firstFlushTimerRef.current = null;
         }, FIRST_FLUSH_DELAY_MS);
       }
@@ -836,7 +649,7 @@ export function TrackScreen() {
           // Update user activity status (every 60 seconds)
           try {
             const userActor = getBikeraUserActor({}, identity);
-            void (userActor as any).recordUserActivity(p);
+            void userActor.recordUserActivity(p).catch((e) => addLog('warn', 'Could not record activity', e));
           } catch (e) {
             addLog('warn', 'User activity recording failed', e);
           }
@@ -880,10 +693,10 @@ export function TrackScreen() {
       return;
     }
 
-    if (fullRouteRef.current.length >= 2 && !isTrackingRef.current) {
+    if (pendingSharedRideRef.current || (fullRouteRef.current.length >= 2 && !isTrackingRef.current)) {
       rideAutoStart.endStart();
       setShowSuccessModal(true);
-      warning('Save the previous route first', 'The route is still in memory. Retry saving it before starting another ride.');
+      warning('Previous ride needs attention', 'Review the save options before starting another ride.');
       return;
     }
 
@@ -892,6 +705,7 @@ export function TrackScreen() {
     shareConsentRef.current = shareWithBikera;
     sessionIdRef.current = null;
     setLocalRouteSaved(false);
+    setSharedRideStatus(null);
 
     try {
       // Request permissions if needed
@@ -967,7 +781,6 @@ export function TrackScreen() {
         firstCacheTime: 0,
         lastUpdateTime: 0,
         firstFlushSent: false,
-        endFlushSent: false,
       };
 
       // Clear first flush timer if exists
@@ -1043,12 +856,10 @@ export function TrackScreen() {
         addLog('error', 'Failed to start location watch', watchError);
         setGpsError(watchError?.message || 'Failed to start GPS tracking');
         // Don't leave an orphan canister session if GPS watch never started
-        if (sessionStarted && sessionIdRef.current) {
-          try {
-            await endSessionRef.current();
-          } catch {
-            // ignore
-          }
+        const identity = getIdentity();
+        if (sessionStarted && sessionIdRef.current && identity) {
+          await getBikeraUserActor({}, identity).endActivitySession(sessionIdRef.current, identity.getPrincipal()).catch(() => {});
+          sessionIdRef.current = null;
         }
         throw watchError;
       }
@@ -1067,7 +878,7 @@ export function TrackScreen() {
       setIsStarting(false);
       rideAutoStart.endStart();
     }
-  }, [addLog, canTrack, error, warning, principal, shareWithBikera, startSessionOnCanister, handleLocationUpdate]);
+  }, [addLog, canTrack, error, warning, principal, getIdentity, shareWithBikera, startSessionOnCanister, handleLocationUpdate]);
 
   handleStartRef.current = handleStart;
 
@@ -1185,9 +996,11 @@ export function TrackScreen() {
 
   // Perform the actual stop operation
   const performStop = async () => {
+    if (!isTrackingRef.current || isStoppingRef.current) return;
     isStoppingRef.current = true;
     setIsStopping(true);
     const shared = shareConsentRef.current;
+    const stoppedAt = Date.now();
     setSavedLocallyOnly(!shared);
     if (principal && shared) {
       info('Saving your ride...', 'Please wait while we save your ride data.');
@@ -1196,7 +1009,13 @@ export function TrackScreen() {
     }
     
     // Store session data for success modal (ref is fresher than React state between 1Hz ticks)
-    const finalSessionData = { ...sessionRef.current };
+    const startedAt = startTimeRef.current ?? stoppedAt;
+    const duration = Math.max(0, Math.floor(((pauseStartTimeRef.current ?? stoppedAt) - startedAt - pausedDurationRef.current) / 1_000));
+    const finalSessionData = {
+      ...sessionRef.current,
+      duration,
+      avgSpeed: duration > 0 ? sessionRef.current.distance * 3_600 / duration : 0,
+    };
     setSavedSessionData(finalSessionData);
     
     // Update refs immediately so callbacks stop processing
@@ -1205,7 +1024,7 @@ export function TrackScreen() {
     setIsTracking(false);
     setIsPaused(false);
 
-    // Flush GPS point batcher + shadow worker final batch (matches BikApp Track.tsx)
+    // Send remaining GPS points. Close the worker ride after the account save.
     if (shared) try {
       const batcher = getGPSPointBatcher();
       if (batcher.getQueueSize() > 0) {
@@ -1215,19 +1034,6 @@ export function TrackScreen() {
       }
     } catch (error) {
       addLog('warn', 'Error flushing GPS points', error);
-    }
-
-    if (principal && shared) {
-      try {
-        const flushResult = await ShadowWorkerService.flushBatch(principal);
-        if (flushResult.success && flushResult.submitted) {
-          addLog('info', '[SHADOW WORKER] Final batch flushed successfully');
-        } else {
-          addLog('debug', '[SHADOW WORKER] No batch to flush or flush skipped', flushResult.reason);
-        }
-      } catch (flushError) {
-        addLog('warn', '[SHADOW WORKER] Final flush failed (non-blocking)', flushError);
-      }
     }
 
     // Stop location tracking
@@ -1251,19 +1057,20 @@ export function TrackScreen() {
       firstFlushTimerRef.current = null;
     }
 
-    // Flush cached data to backend (end flush - second call) - matches web app pattern
-    if (principal && shared) {
-      const cached = cachedRideDataRef.current;
-      addLog('info', `🛑 Stopping ride, sending END flush with ${cached.routePoints.length} points`);
-      await flushRideDataToBackend(true);
-      addLog('info', 'Ending session on canister');
-      await endSessionOnCanister();
-    } else {
-      addLog('info', 'Guest mode: skipped account save');
-    }
-
     // Keep the full route on this device so it can be exported as GPX (Ride Files).
     const route = fullRouteRef.current;
+    if (principal && shared) {
+      pendingSharedRideRef.current = { owner: principal, ride: {
+        sessionId: sessionIdRef.current,
+        startMs: startedAt,
+        endMs: stoppedAt,
+        distanceM: finalSessionData.distance * 1_000,
+        durationSeconds: duration,
+        avgKmh: finalSessionData.avgSpeed,
+        maxKmh: finalSessionData.maxSpeed,
+        route,
+      } };
+    }
     if (route.length >= 2) {
       try {
         await persistLocalRoute();
@@ -1276,7 +1083,11 @@ export function TrackScreen() {
       info('No GPX route saved', 'At least two GPS points are needed to save an exportable route.');
     }
 
-    // Clear cache after sending (matches web app)
+    await flushInFlightRef.current;
+    await persistSharedRide();
+    sessionIdRef.current = null;
+
+    // Clear the live cache after capturing the completed ride.
     cachedRideDataRef.current = {
       distance: 0,
       maxSpeed: 0,
@@ -1286,14 +1097,7 @@ export function TrackScreen() {
       firstCacheTime: 0,
       lastUpdateTime: 0,
       firstFlushSent: false,
-      endFlushSent: false,
     };
-
-    // Narrow invalidation after ride — Home + history, not every screen
-    if (principal && shared) {
-      await invalidateAfterRide(principal);
-      addLog('info', 'Invalidated caches after ride completion');
-    }
 
     setIsStopping(false);
     isStoppingRef.current = false;
@@ -1581,8 +1385,28 @@ export function TrackScreen() {
               <Text style={styles.successSubtitle}>
                 {savedLocallyOnly
                   ? localRouteSaved ? 'Saved on this device. Export it from More → Ride files. This ride does not count toward goals or rewards.' : 'No route file was saved. This ride was not shared with Bikera.'
-                  : localRouteSaved ? 'GPS route saved in More → Ride files. Shared ride validation and rewards are processed separately.' : 'Shared ride finished. No local GPX route was saved.'}
+                  : sharedRideStatus === 'saved'
+                    ? 'Saved to your Bikera account. Eligible races sync automatically.'
+                    : sharedRideStatus === 'noDistance'
+                      ? 'No distance was recorded for your Bikera account.'
+                      : 'Account save could not be confirmed.'}
               </Text>
+              {!savedLocallyOnly && localRouteSaved && (
+                <Text style={styles.successSubtitle}>GPS route available in More → Ride files.</Text>
+              )}
+              {sharedRideStatus === 'retry' && (
+                <View>
+                  <TouchableOpacity accessibilityRole="button" disabled={savingSharedRide} onPress={() => { void persistSharedRide(); }} style={{ padding: 14, minHeight: 44 }}>
+                    <Text style={{ color: colors.brandPurple, fontWeight: '700', textAlign: 'center' }}>{savingSharedRide ? 'Saving to Bikera…' : 'Retry account save'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity accessibilityRole="button" disabled={savingSharedRide} onPress={() => Alert.alert('Skip the account save retry?', 'You can keep any GPX file saved on this device.', [
+                    { text: 'Keep retry', style: 'cancel' },
+                    { text: 'Skip retry', style: 'destructive', onPress: () => { pendingSharedRideRef.current = null; setSharedRideStatus('skipped'); } },
+                  ])} style={{ padding: 14, minHeight: 44 }}>
+                    <Text style={{ color: colors.textSecondary, textAlign: 'center' }}>Skip retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
               {!localRouteSaved && fullRouteRef.current.length >= 2 ? (
                 <View>
                   <TouchableOpacity accessibilityRole="button" disabled={savingLocalRoute} onPress={() => {

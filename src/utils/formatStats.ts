@@ -63,10 +63,16 @@ export function formatImera(
   amount: bigint | number | string | null | undefined,
   opts?: { maxFractionDigits?: number; minFractionDigits?: number }
 ): string {
-  const n = normalizeImera(amount);
+  return formatImeraTokens(normalizeImera(amount), opts);
+}
+
+export function formatImeraTokens(
+  tokens: number,
+  opts?: { maxFractionDigits?: number; minFractionDigits?: number }
+): string {
   const maxFractionDigits = opts?.maxFractionDigits ?? 2;
   const minFractionDigits = opts?.minFractionDigits ?? Math.min(2, maxFractionDigits);
-  return n.toLocaleString(STATS_LOCALE, {
+  return tokens.toLocaleString(STATS_LOCALE, {
     minimumFractionDigits: minFractionDigits,
     maximumFractionDigits: maxFractionDigits,
   });
@@ -76,7 +82,7 @@ export function formatImeraFromE8s(
   e8s: bigint | number | string | null | undefined,
   opts?: { maxFractionDigits?: number; minFractionDigits?: number }
 ): string {
-  return formatImera(fromE8s(e8s), opts);
+  return formatImeraTokens(fromE8s(e8s), opts);
 }
 
 /** Distance in km — fixed decimals, no thousands locale tricks. */
@@ -87,4 +93,9 @@ export function formatDistanceKm(km: number | null | undefined, digits = 1): str
 
 export function formatDistanceKmLabel(km: number | null | undefined, digits = 1): string {
   return `${formatDistanceKm(km, digits)} km`;
+}
+
+/** Older canister records may contain nanoseconds in the duration field. */
+export function rideDurationSeconds(duration: bigint): number {
+  return Number(duration > 100_000_000n ? duration / 1_000_000_000n : duration);
 }

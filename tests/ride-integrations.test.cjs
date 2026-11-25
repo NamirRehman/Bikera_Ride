@@ -19,6 +19,7 @@ function loadService(name, mocks = {}, globals = {}) {
     require(specifier) {
       if (Object.hasOwn(mocks, specifier)) return mocks[specifier];
       if (specifier === './integration-utils') return loadService('integration-utils', {}, globals);
+      if (specifier === '../utils/batch' || specifier === '../utils/formatStats') return loadService(specifier, {}, globals);
       if (specifier === '@dfinity/principal') return { Principal };
       throw new Error(`Unexpected dependency: ${specifier}`);
     },
@@ -32,6 +33,172 @@ const other = Principal.fromUint8Array(Uint8Array.from([2]));
 const identity = { getPrincipal: () => rider };
 const principal = rider.toText();
 const plain = (value) => JSON.parse(JSON.stringify(value));
+
+const rideStart = 1_794_844_800_000;
+const sharedRide = {
+  sessionId: 'live-ride', startMs: rideStart, endMs: rideStart + 45_000,
+  distanceM: 200.3, durationSeconds: 45, maxKmh: 18.8, avgKmh: 16.2,
+  route: [0, 1000, 45_000].map((offset) => ({ latitude: 1, longitude: 2, timestampMs: rideStart + offset })),
+};
+const startedAt = BigInt(rideStart) * 1_000_000n;
+const endedAt = BigInt(sharedRide.endMs) * 1_000_000n;
+
+test('a completed shared ride without a live session uses the backend ride ID and nanosecond timestamps', async () => {
+  const service = loadService('sharedRide', { '../utils/actors': {
+    getBikeraUserActor: (_options, signed) => {
+      assert.equal(signed, identity);
+      return { submitCompletedRide: async (payload) => {
+        assert.equal(payload.startPoint.timestamp, startedAt);
+        assert.equal(payload.endPoint.timestamp, endedAt);
+        assert.equal(payload.distance, 200n);
+        assert.equal(payload.duration, 45_000n);
+        assert.equal(payload.maxSpeed, 19n);
+        return { ok: 'completed-ride' };
+      } };
+    },
+  } });
+  const saved = await service.saveSharedRide({ ...sharedRide, sessionId: null }, identity);
+  assert.equal(saved.id, 'completed-ride');
+  assert.equal(saved.distance, 200n);
+});
+
+test('a lost finish response reuses the original session and appends only unsaved points', async () => {
+  let finished = false;
+  let updates = 0;
+  const actor = {
+    getActivitySession: async () => [{
+      id: 'live-ride', isActive: !finished, startTime: startedAt,
+      endTime: finished ? [endedAt] : [], distance: finished ? 200n : 10n,
+      route: [{ timestamp: startedAt }],
+    }],
+    updateActivitySessionWithPoints: async (id, distance, _max, _avg, points, owner) => {
+      updates++;
+      assert.equal(id, 'live-ride');
+      assert.equal(distance, 200n);
+      assert.equal(points.length, 2);
+      assert.equal(points[0].timestamp, startedAt + 1_000_000_000n);
+      assert.equal(owner.toText(), principal);
+      return { ok: 'updated' };
+    },
+    endActivitySession: async () => { finished = true; throw Error('connection lost'); },
+    submitCompletedRide: async () => { assert.fail('The live ride must not be copied'); },
+  };
+  const { saveSharedRide } = loadService('sharedRide', { '../utils/actors': { getBikeraUserActor: () => actor } });
+  assert.equal((await saveSharedRide(sharedRide, identity)).id, 'live-ride');
+  assert.equal((await saveSharedRide(sharedRide, identity)).id, 'live-ride');
+  assert.equal(updates, 1);
+});
+
+test('a rejected live distance update leaves the ride available for retry', async () => {
+  const { saveSharedRide } = loadService('sharedRide', { '../utils/actors': { getBikeraUserActor: () => ({
+    getActivitySession: async () => [{ isActive: true, endTime: [], distance: 0n, route: [] }],
+    updateActivitySessionWithPoints: async () => ({ err: 'Temporarily unavailable' }),
+    endActivitySession: async () => { assert.fail('Do not close a ride with an unsaved distance'); },
+  }) } });
+  await assert.rejects(saveSharedRide(sharedRide, identity), /Temporarily unavailable/);
+});
+
+test('race sync checks every active page, verifies membership and uses the saved ride ID', async () => {
+  const searched = [];
+  const checked = [];
+  const sent = [];
+  const race = (id, startTime = startedAt, endTime = endedAt) => ({ id, startTime, endTime });
+  const expired = Array.from({ length: 50 }, (_, index) => race(`past-${index}`, 0n, startedAt - 1n));
+  const { submitSessionToJoinedPools } = loadService('poolRideSubmit', { '../utils/actors': {
+    getBikeraPoolsActor: ({ agentOptions }) => {
+      assert.equal(agentOptions.identity, identity);
+      return {
+        getActivePools: async (limit, offset) => {
+          assert.equal(limit, 50n);
+          searched.push(offset);
+          if (offset < 100n) return expired;
+          return [race('member', endedAt, endedAt + 10n), race('nonmember'), race('duplicate'), race('failed'), race('future', endedAt + 1n)];
+        },
+        isParticipant: async (id, owner) => { assert.equal(owner.toText(), principal); checked.push(id); return id !== 'nonmember'; },
+        submitRide: async ({ poolId, sessionId }) => {
+          assert.equal(sessionId, 'completed-ride');
+          sent.push(poolId);
+          if (poolId === 'duplicate') return { err: 'Session already submitted to this pool' };
+          if (poolId === 'failed') return { err: 'Rate limit exceeded' };
+          return { ok: {} };
+        },
+      };
+    },
+  } });
+  const result = await submitSessionToJoinedPools({ id: 'completed-ride', startTime: startedAt, endTime: endedAt, distance: 200n }, identity);
+  assert.deepEqual(searched, [0n, 50n, 100n]);
+  assert.deepEqual(checked, ['member', 'nonmember', 'duplicate', 'failed']);
+  assert.deepEqual(sent, ['member', 'duplicate', 'failed']);
+  assert.equal(result.submitted, 1);
+  assert.equal(result.failed, true);
+});
+
+test('history counts only distance XP for a ride and reads period reward and XP totals', async () => {
+  const { fetchRideMatchRows, fetchPeriodEarnings } = loadService('rideMatch', { '../utils/actors': {
+    getBikeraXpActor: () => ({ getXPInRange: async (owner, from, to) => {
+      assert.equal(owner.toText(), principal);
+      assert.ok(from < to);
+      return { total: 22n, transactions: [
+        { reason: { Distance: 200n }, amount: 2n, timestamp: startedAt },
+        { reason: { Mining: 5n }, amount: 20n, timestamp: startedAt },
+      ] };
+    } }),
+    getBikeraRewardsActor: () => ({ getRewardsInRange: async () => ({
+      total: 50_000n, rewards: [{ amount: 50_000n, timestamp: startedAt }],
+    }) }),
+  } });
+  const match = await fetchRideMatchRows(rider, rideStart, sharedRide.endMs);
+  assert.equal(match.xp.length, 1);
+  assert.equal(match.xp[0].distance, 200);
+  assert.equal(match.rewards[0].amount, 0.0005);
+  const period = await fetchPeriodEarnings(rider, rideStart, sharedRide.endMs);
+  assert.equal(period.xp, 22);
+  assert.equal(period.imera, 0.0005);
+});
+
+test('iMERA formatting preserves small rewards and large whole-token balances', () => {
+  const { formatImeraFromE8s } = loadService('../utils/formatStats');
+  assert.equal(formatImeraFromE8s('50000', { maxFractionDigits: 4 }), '0.0005');
+  assert.equal(formatImeraFromE8s('1000000000000000'), '10,000,000.00');
+});
+
+test('country updates preserve the signed rider’s bio and handle backend rejection', async () => {
+  let bio = 'Bike commuter';
+  let stored = null;
+  let rejected = false;
+  const { saveUserCountry, clearUserCountry } = loadService('userCountry', {
+    '@react-native-async-storage/async-storage': { default: {
+      setItem: async (_key, value) => { stored = value; },
+      removeItem: async () => { stored = null; },
+    } },
+    './dataCache': { dataCache: { invalidate: async () => {} } },
+    '../utils/actors': { getBikeraUserActor: (_options, signed) => {
+      assert.equal(signed, identity);
+      return {
+        getUserProfile: async () => [{ bio: [bio] }],
+        updateProfile: async (_name, _email, _display, nextBio, _avatar, _links, owner) => {
+          assert.equal(owner.toText(), principal);
+          assert.equal(nextBio.length, 1);
+          if (rejected) return { err: 'Profile update refused' };
+          bio = nextBio[0];
+          return { ok: null };
+        },
+      };
+    } },
+  });
+  const account = { identity, principalText: principal };
+  await saveUserCountry('pk', account);
+  assert.equal(bio, '[PK] Bike commuter');
+  assert.equal(stored, 'PK');
+  rejected = true;
+  await assert.rejects(clearUserCountry(account), /Profile update refused/);
+  assert.equal(stored, 'PK');
+  rejected = false;
+  bio = '[PK]';
+  await clearUserCountry(account);
+  assert.equal(bio, '');
+  assert.equal(stored, null);
+});
 
 test('private owner queries reject missing, anonymous and changed identities', async () => {
   let actorCalls = 0;

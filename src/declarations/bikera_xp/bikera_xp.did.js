@@ -34,6 +34,8 @@ export const idlFactory = ({ IDL }) => {
     'err' : IDL.Text,
   });
   const Day = IDL.Nat;
+  const LeaderboardRow = IDL.Record({ rank: IDL.Nat, userId: UserId, xp: IDL.Nat, level: IDL.Nat, totalDistance: IDL.Nat });
+  const LeaderboardPage = IDL.Record({ total: IDL.Nat, rows: IDL.Vec(LeaderboardRow), callerRow: IDL.Opt(LeaderboardRow) });
   const TimeFilter = IDL.Variant({
     'AllTime' : IDL.Null,
     'Weekly' : IDL.Null,
@@ -134,6 +136,13 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(IDL.Tuple(UserId, XPAmount))],
         ['query'],
       ),
+    'getLeaderboardPage' : IDL.Func(
+      [IDL.Nat, IDL.Nat, TimeFilter, IDL.Variant({ XP: IDL.Null, Distance: IDL.Null, Level: IDL.Null })],
+      [LeaderboardPage], ['query'],
+    ),
+    'getXPInRange' : IDL.Func(
+      [UserId, Timestamp, Timestamp], [IDL.Record({ total: IDL.Nat, transactions: IDL.Vec(XPTransaction) })], ['query'],
+    ),
     'getLeaderboardWithFilter' : IDL.Func(
         [IDL.Nat, TimeFilter],
         [IDL.Vec(IDL.Tuple(UserId, XPAmount))],

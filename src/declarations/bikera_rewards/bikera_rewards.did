@@ -565,6 +565,7 @@ service : {
   getUnclaimedRewards: (UserId, opt nat) -> (vec UserReward) query;
   getUserMovementStakes: (UserId, opt nat, opt nat) ->
    (vec MovementStake) query;
+  getRewardsInRange: (UserId, Timestamp, Timestamp) -> (record { total: TokenAmount; count: nat; rewards: vec UserReward }) query;
   getUserRewards: (UserId, opt nat) -> (vec UserReward) query;
   /// EFFICIENT: Get user rewards snapshot (single call instead of multiple)
   /// Combines user rewards, staking info, and stats in one efficient query

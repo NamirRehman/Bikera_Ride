@@ -2,8 +2,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, FlatList, Platform, Pressable, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Principal } from '@dfinity/principal';
-import { HttpAgent } from '@dfinity/agent';
 
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
@@ -12,20 +10,21 @@ import { Card } from '../components/Card';
 import { useAuth } from '../contexts/AuthContext';
 import { colors } from '../theme/tokens';
 import { useCachedData } from '../hooks/useCachedData';
-import { getBikeraImeraActor, getBikeraRewardsActor, getHost } from '../utils/actors';
+import { getBikeraImeraActor, getBikeraRewardsActor } from '../utils/actors';
+import { requireRiderIdentity } from '../services/integration-utils';
 import { WEB_APP_URL } from '../config';
 import { GuestBanner } from '../components/GuestBanner';
-import { E8S_PER_TOKEN, formatImera, fromE8s } from '../utils/formatStats';
+import { formatImeraFromE8s } from '../utils/formatStats';
 
 interface Transaction {
   id: string;
-  amount: number;
+  amountE8s: string;
   timestamp: number;
 }
 
-function BalanceCard({ balance, loading }: { balance: number; loading: boolean }) {
+function BalanceCard({ balance, loading }: { balance: string | null; loading: boolean }) {
   const formattedBalance = useMemo(
-    () => formatImera(balance, { minFractionDigits: 2, maxFractionDigits: 4 }),
+    () => balance === null ? '—' : `${formatImeraFromE8s(balance, { minFractionDigits: 2, maxFractionDigits: 4 })} iMERA`,
     [balance]
   );
 
@@ -41,7 +40,7 @@ function BalanceCard({ balance, loading }: { balance: number; loading: boolean }
         {loading ? (
           <ThreeDotLoader color={colors.brandBlue100} size="small" />
         ) : (
-          <Text style={styles.balanceAmount}>{formattedBalance} iMERA</Text>
+          <Text style={styles.balanceAmount}>{formattedBalance}</Text>
         )}
         <Text style={styles.balanceHint}>Read-only on mobile v1</Text>
       </LinearGradient>
@@ -70,7 +69,7 @@ function TransactionItem({ transaction }: { transaction: Transaction }) {
         <Text style={styles.transactionDate}>{formattedDate}</Text>
       </View>
       <Text style={styles.transactionAmountText}>
-        +{formatImera(transaction.amount, { minFractionDigits: 2, maxFractionDigits: 4 })} iMERA
+        +{formatImeraFromE8s(transaction.amountE8s, { minFractionDigits: 2, maxFractionDigits: 4 })} iMERA
       </Text>
     </View>
   );
@@ -87,39 +86,22 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
   const fetchWalletData = useCallback(async () => {
     if (!principal) return null;
 
-    const identity = getIdentity();
-    if (!identity) return null;
-
-    const host = getHost();
-    const isDevelopment = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
-    const agent = new HttpAgent({
-      host,
-      identity,
-      fetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-    });
-
-    if (isDevelopment) {
-      await agent.fetchRootKey();
-    }
-
-    const principalObj = Principal.fromText(principal);
+    const identity = requireRiderIdentity(getIdentity(), principal);
+    const principalObj = identity.getPrincipal();
     const account = { owner: principalObj, subaccount: [] as [] };
-    const imeraActor = getBikeraImeraActor({ agent });
+    const imeraActor = getBikeraImeraActor({}, identity);
     const rewardsActor = getBikeraRewardsActor({}, identity);
     const [balance, rewardsSnapshot] = await Promise.all([
-      imeraActor.icrc1_balance_of(account).catch(() => 0n),
-      (rewardsActor as any).getRewardsSnapshot?.(principalObj).catch(() => null),
+      imeraActor.icrc1_balance_of(account),
+      rewardsActor.getRewardsSnapshot(principalObj).catch(() => null),
     ]);
 
-    const recentRewards = Array.isArray(rewardsSnapshot?.recentRewards) ? rewardsSnapshot.recentRewards : [];
+    const recentRewards = rewardsSnapshot?.recentRewards ?? [];
     const transactions: Transaction[] = recentRewards
-      .map((reward: any, index: number) => {
-        const raw = Number(reward.amount || 0);
-        // Mining snapshots store whole tokens; ledger amounts are e8s.
-        const amount = raw >= E8S_PER_TOKEN / 1000 ? fromE8s(raw) : raw;
+      .map((reward, index) => {
         return {
           id: `reward-${index}-${reward.roundId ?? index}`,
-          amount,
+          amountE8s: reward.amount.toString(),
           timestamp: Number(reward.timestamp || 0) / 1_000_000 || Date.now(),
         };
       })
@@ -127,18 +109,19 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
       .slice(0, 100);
 
     return {
-      balance: fromE8s(balance),
+      balance: balance.toString(),
       transactions,
     };
   }, [principal, getIdentity]);
 
   const { data: walletData, loading, refetch } = useCachedData({
-    type: 'wallet_v2',
-    identifier: principal || undefined,
+    type: 'wallet',
+    identifier: principal ? `${principal}:ledger` : undefined,
     fetcher: fetchWalletData,
     enabled: !!principal,
     tier: 'normal',
-    refetchOnForeground: false,
+    refetchOnFocus: true,
+    refetchOnForeground: true,
     minRefetchIntervalMs: 60_000,
   });
 
@@ -148,7 +131,7 @@ export function WalletScreen({ embedded = false }: WalletScreenProps) {
     setRefreshing(false);
   }, [refetch]);
 
-  const balance = walletData?.balance || 0;
+  const balance = walletData?.balance ?? (principal ? null : '0');
   const transactions = walletData?.transactions || [];
 
   const content = (

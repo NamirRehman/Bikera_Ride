@@ -16,7 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { getBikeraUserActor } from '../utils/actors';
-import { Principal } from '@dfinity/principal';
+import { requireRiderIdentity } from '../services/integration-utils';
 import { colors, shadows } from '../theme/tokens';
 import { ThreeDotLoader } from './ThreeDotLoader';
 
@@ -99,12 +99,7 @@ export function RegistrationModal({ visible, onClose }: RegistrationModalProps) 
     setError(null);
 
     try {
-      const identity = getIdentity();
-      if (!identity) {
-        setError('Failed to get authenticated identity');
-        setSubmitting(false);
-        return;
-      }
+      const identity = requireRiderIdentity(getIdentity(), principal);
 
       const userActor = getBikeraUserActor({}, identity);
       let usernameToUse = username || generateUsernameFromPrincipal(principal);
@@ -114,7 +109,7 @@ export function RegistrationModal({ visible, onClose }: RegistrationModalProps) 
         email ? [email] : [],
         displayName ? [displayName] : [],
         [],
-        Principal.fromText(principal)
+        identity.getPrincipal()
       );
 
       const timeoutPromise = new Promise((_, reject) =>
@@ -136,7 +131,7 @@ export function RegistrationModal({ visible, onClose }: RegistrationModalProps) 
           email ? [email] : [],
           displayName ? [displayName] : [],
           [],
-          Principal.fromText(principal)
+          identity.getPrincipal()
         );
       }
 

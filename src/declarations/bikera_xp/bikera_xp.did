@@ -108,7 +108,11 @@ type Achievement =
    requiredXP: XPAmount;
    reward: XPAmount;
  };
+type LeaderboardRow = record { rank: nat; userId: UserId; xp: nat; level: nat; totalDistance: nat };
+type LeaderboardPage = record { total: nat; rows: vec LeaderboardRow; callerRow: opt LeaderboardRow };
 service : {
+  getLeaderboardPage: (nat, nat, TimeFilter, variant { XP; Distance; Level }) -> (LeaderboardPage) query;
+  getXPInRange: (UserId, Timestamp, Timestamp) -> (record { total: nat; transactions: vec XPTransaction }) query;
   addAchievementXP: (UserId, text) -> (Result_3);
   addAdminPrincipal: (principal) -> (Result_1);
   addDistanceXP: (UserId, Distance) -> (Result_3);

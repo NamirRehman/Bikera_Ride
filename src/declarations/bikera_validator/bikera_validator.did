@@ -142,6 +142,8 @@ service : {
   getSuspiciousPatterns: (UserId) -> (vec text) query;
   getUserDailyRouteCount: (UserId, nat) -> (nat) query;
   getUserRouteHistory: (UserId, opt nat) -> (vec RouteValidation) query;
+  getUserRoutePage: (UserId, opt Timestamp, opt variant { Walk; Run; Bike }, nat, nat) ->
+    (record { total: nat; validCount: nat; totalDistance: nat; rows: vec RouteSummary }) query;
   getUserRouteSummaries: (UserId, opt nat) -> (vec RouteSummary) query;
   getValidationConfig: () -> (ValidationConfig) query;
   getValidationResult: (text) -> (opt RouteValidation) query;

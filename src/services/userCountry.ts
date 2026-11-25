@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Principal } from '@dfinity/principal';
+import { requireRiderIdentity } from './integration-utils';
 import { getBikeraUserActor } from '../utils/actors';
 import { dataCache } from './dataCache';
 
@@ -736,88 +736,32 @@ export async function clearStoredCountry(): Promise<void> {
   await AsyncStorage.removeItem(STORAGE_COUNTRY);
 }
 
-/** Remove country locally and strip the on-chain bio tag. */
-export async function clearUserCountry(
-  opts: { identity?: any; principalText?: string; currentBio?: string } = {}
-): Promise<void> {
+type CountryUpdate = { identity?: unknown; principalText?: string };
+
+async function updateCountryTag(code: string | null, options: CountryUpdate): Promise<void> {
+  if (!options.principalText) return;
+  const identity = requireRiderIdentity(options.identity, options.principalText);
+  const actor = getBikeraUserActor({}, identity);
+  const rider = identity.getPrincipal();
+  const [profile] = await actor.getUserProfile(rider);
+  if (!profile) throw new Error('Your Bikera profile could not be loaded.');
+  const bio = profile.bio[0] ?? '';
+  const nextBio = code ? applyCountryTag(bio, code) : stripCountryTag(bio);
+  const result = await actor.updateProfile([], [], [], [nextBio], [], [], rider);
+  if ('err' in result) throw new Error(result.err);
+  void dataCache.invalidate('userPublic', options.principalText).catch(() => {});
+}
+
+export async function clearUserCountry(options: CountryUpdate = {}): Promise<void> {
+  await updateCountryTag(null, options);
   await clearStoredCountry();
-
-  const principalText =
-    opts.principalText ||
-    (await AsyncStorage.getItem('bikera_principal')) ||
-    '';
-  if (!principalText) return;
-
-  try {
-    const userActor = getBikeraUserActor({}, opts.identity);
-    const p = Principal.fromText(principalText);
-    let bio = opts.currentBio;
-    if (bio == null) {
-      const profileResult = await userActor.getUserProfile(p).catch(() => []);
-      const profile = Array.isArray(profileResult) && profileResult.length > 0 ? profileResult[0] : null;
-      const bioRaw = profile?.bio;
-      bio = Array.isArray(bioRaw) && bioRaw.length > 0
-        ? String(bioRaw[0])
-        : (typeof bioRaw === 'string' ? bioRaw : '');
-    }
-    const nextBio = stripCountryTag(bio || '');
-    await userActor.updateProfile(
-      [],
-      [],
-      [],
-      nextBio ? [nextBio] : [],
-      [],
-      [],
-      p
-    );
-    await dataCache.invalidate('userPublic', principalText);
-  } catch (e) {
-    if (__DEV__) console.warn('[COUNTRY] Failed to clear country from profile bio:', e);
-  }
 }
 
-/** Persist country locally and tag the on-chain bio so other clients can filter. */
-export async function saveUserCountry(
-  countryCode: string,
-  opts: { identity?: any; principalText?: string; currentBio?: string } = {}
-): Promise<void> {
+export async function saveUserCountry(countryCode: string, options: CountryUpdate = {}): Promise<void> {
   const code = countryCode.toUpperCase();
+  await updateCountryTag(code, options);
   await setStoredCountry(code);
-
-  const principalText =
-    opts.principalText ||
-    (await AsyncStorage.getItem('bikera_principal')) ||
-    '';
-  if (!principalText) return;
-
-  try {
-    const userActor = getBikeraUserActor({}, opts.identity);
-    const p = Principal.fromText(principalText);
-    let bio = opts.currentBio;
-    if (bio == null) {
-      const profileResult = await userActor.getUserProfile(p).catch(() => []);
-      const profile = Array.isArray(profileResult) && profileResult.length > 0 ? profileResult[0] : null;
-      const bioRaw = profile?.bio;
-      bio = Array.isArray(bioRaw) && bioRaw.length > 0
-        ? String(bioRaw[0])
-        : (typeof bioRaw === 'string' ? bioRaw : '');
-    }
-    const nextBio = applyCountryTag(bio || '', code);
-    await userActor.updateProfile(
-      [], // username
-      [], // email
-      [], // displayName
-      [nextBio], // bio
-      [], // avatar
-      [], // socialLinks
-      p
-    );
-    await dataCache.invalidate('userPublic', principalText);
-  } catch (e) {
-    if (__DEV__) console.warn('[COUNTRY] Failed to sync country to profile bio:', e);
-  }
 }
-
 export function countryName(code: string | undefined | null): string {
   if (!code) return 'Unknown';
   return COUNTRY_OPTIONS.find((c) => c.code === code.toUpperCase())?.name || code.toUpperCase();

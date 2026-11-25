@@ -130,6 +130,10 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(RouteValidation)],
         ['query'],
       ),
+    'getUserRoutePage' : IDL.Func(
+      [UserId, IDL.Opt(Timestamp), IDL.Opt(IDL.Variant({ Walk: IDL.Null, Run: IDL.Null, Bike: IDL.Null })), IDL.Nat, IDL.Nat],
+      [IDL.Record({ total: IDL.Nat, validCount: IDL.Nat, totalDistance: IDL.Nat, rows: IDL.Vec(RouteSummary) })], ['query'],
+    ),
     'getUserRouteSummaries' : IDL.Func(
         [UserId, IDL.Opt(IDL.Nat)],
         [IDL.Vec(RouteSummary)],

@@ -1,117 +1,38 @@
-import { Actor, HttpAgent } from '@dfinity/agent';
 import type { Principal } from '@dfinity/principal';
 
-import {
-  canisterIds,
-  getBikeraRewardsActor,
-  getBikeraXpActor,
-  getHost,
-} from '../utils/actors';
+import { getBikeraRewardsActor, getBikeraXpActor } from '../utils/actors';
+import { fromE8s } from '../utils/formatStats';
 
 export type RideMatchRow = { time: number; amount: number; distance?: number };
 
-const xpMatchIdl = ({ IDL }: { IDL: any }) => {
-  const XPMatchRow = IDL.Record({
-    timestamp: IDL.Int,
-    amount: IDL.Nat,
-    distance: IDL.Opt(IDL.Nat),
-  });
-  return IDL.Service({
-    getXPMatchRows: IDL.Func(
-      [IDL.Principal, IDL.Opt(IDL.Nat)],
-      [IDL.Vec(XPMatchRow)],
-      ['query']
-    ),
-  });
-};
+const ns = (ms: number) => BigInt(Math.trunc(ms)) * 1_000_000n;
+const ms = (timestamp: bigint) => Number(timestamp / 1_000_000n);
 
-const rewardMatchIdl = ({ IDL }: { IDL: any }) => {
-  const RewardMatchRow = IDL.Record({
-    timestamp: IDL.Int,
-    amount: IDL.Nat,
-  });
-  return IDL.Service({
-    getRewardMatchRows: IDL.Func(
-      [IDL.Principal, IDL.Opt(IDL.Nat)],
-      [IDL.Vec(RewardMatchRow)],
-      ['query']
-    ),
-  });
-};
-
-function queryActor(idl: (args: { IDL: any }) => unknown, canisterId: string) {
-  const agent = new HttpAgent({
-    host: getHost(),
-    fetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-  });
-  return Actor.createActor(idl as never, { agent, canisterId });
-}
-
-function optNat(value: unknown): number | undefined {
-  if (Array.isArray(value) && value.length > 0) return Number(value[0]);
-  if (typeof value === 'bigint') return Number(value);
-  return undefined;
-}
-
-function nsToMs(value: unknown): number {
-  return Number(value || 0) / 1_000_000;
-}
-
-async function fetchFullRows(
-  userId: Principal,
-  xpLimit: number,
-  rewardLimit: number
-): Promise<{ xp: RideMatchRow[]; rewards: RideMatchRow[] }> {
-  const [xpTransactions, allRewards] = await Promise.all([
-    getBikeraXpActor().getXPTransactions(userId, [BigInt(xpLimit)]),
-    getBikeraRewardsActor().getUserRewards(userId, [BigInt(rewardLimit)]),
-  ]);
-
-  const xp = (xpTransactions || []).map((tx: any) => ({
-    time: nsToMs(tx.timestamp),
-    amount: Number(tx.amount || 0n),
-    distance:
-      tx.reason && typeof tx.reason === 'object' && 'Distance' in tx.reason
-        ? Number(tx.reason.Distance || 0n)
-        : optNat(tx.distance),
-  }));
-  const rewards = (allRewards || []).map((reward: any) => ({
-    time: nsToMs(reward.timestamp),
-    amount: Number(reward.amount || 0n) / 100_000_000,
-  }));
-  return { xp, rewards };
-}
-
-/** Small XP and iMERA rows for a ride list. Falls back to the full records until those canisters are upgraded. */
 export async function fetchRideMatchRows(
   userId: Principal,
-  xpLimit: number,
-  rewardLimit: number
+  oldestMs: number,
+  newestMs: number,
 ): Promise<{ xp: RideMatchRow[]; rewards: RideMatchRow[] }> {
-  try {
-    const xpActor = queryActor(xpMatchIdl, canisterIds.bikera_xp) as unknown as {
-      getXPMatchRows: (userId: Principal, limit: [bigint]) => Promise<Array<{ timestamp: bigint; amount: bigint; distance: unknown }>>;
-    };
-    const rewardsActor = queryActor(rewardMatchIdl, canisterIds.bikera_rewards) as unknown as {
-      getRewardMatchRows: (userId: Principal, limit: [bigint]) => Promise<Array<{ timestamp: bigint; amount: bigint }>>;
-    };
-    const [xpRows, rewardRows] = await Promise.all([
-      xpActor.getXPMatchRows(userId, [BigInt(xpLimit)]),
-      rewardsActor.getRewardMatchRows(userId, [BigInt(rewardLimit)]),
-    ]);
-    return {
-      xp: (xpRows || []).map((row) => ({
-        time: nsToMs(row.timestamp),
-        amount: Number(row.amount || 0n),
-        distance: optNat(row.distance),
-      })),
-      rewards: (rewardRows || []).map((row) => ({
-        time: nsToMs(row.timestamp),
-        amount: Number(row.amount || 0n) / 100_000_000,
-      })),
-    };
-  } catch (error) {
-    if (__DEV__) console.warn('[HISTORY] Match rows unavailable, loading full records:', error);
-    return fetchFullRows(userId, xpLimit, rewardLimit);
-  }
+  const from = ns(oldestMs - 5 * 60_000);
+  const end = newestMs + 5 * 60_000;
+  const [xp, rewards] = await Promise.allSettled([
+    getBikeraXpActor().getXPInRange(userId, from, ns(end)),
+    getBikeraRewardsActor().getRewardsInRange(userId, from, ns(end + 5 * 60_000)),
+  ]);
+  return {
+    xp: xp.status === 'fulfilled' ? xp.value.transactions.flatMap((tx) =>
+      'Distance' in tx.reason ? [{ time: ms(tx.timestamp), amount: Number(tx.amount), distance: Number(tx.reason.Distance) }] : []
+    ) : [],
+    rewards: rewards.status === 'fulfilled' ? rewards.value.rewards.map((reward) =>
+      ({ time: ms(reward.timestamp), amount: fromE8s(reward.amount) })
+    ) : [],
+  };
+}
+
+export async function fetchPeriodEarnings(userId: Principal, startMs: number, endMs: number) {
+  const [xp, imera] = await Promise.all([
+    getBikeraXpActor().getXPInRange(userId, ns(startMs), ns(endMs)),
+    getBikeraRewardsActor().getRewardsInRange(userId, ns(startMs), ns(endMs)),
+  ]);
+  return { xp: Number(xp.total), imera: fromE8s(imera.total) };
 }

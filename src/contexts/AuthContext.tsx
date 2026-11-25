@@ -261,7 +261,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 if (cachedRegistered === '1' || !!cachedUsername) {
                   setIsRegistered(true);
                 }
-                void dataCache.warm([{ type: 'dashboard', identifier: storedPrincipal }]);
+                void dataCache.warm([{ type: 'dashboard', identifier: `${storedPrincipal}:ledger` }]);
                 startupGate.start(3500);
               } catch {}
               
@@ -298,7 +298,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (cachedRegistered === '1' || !!cachedUsername) {
               setIsRegistered(true);
             }
-            void dataCache.warm([{ type: 'dashboard', identifier: p }]);
+            void dataCache.warm([{ type: 'dashboard', identifier: `${p}:ledger` }]);
             startupGate.start(3500);
           } catch {}
         } else {

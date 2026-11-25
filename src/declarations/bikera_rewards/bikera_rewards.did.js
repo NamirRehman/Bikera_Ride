@@ -547,6 +547,9 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(MovementStake)],
         ['query'],
       ),
+    'getRewardsInRange' : IDL.Func(
+      [UserId, Timestamp, Timestamp], [IDL.Record({ total: IDL.Nat, count: IDL.Nat, rewards: IDL.Vec(UserReward) })], ['query'],
+    ),
     'getUserRewards' : IDL.Func(
         [UserId, IDL.Opt(IDL.Nat)],
         [IDL.Vec(UserReward)],

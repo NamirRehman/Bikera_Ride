@@ -88,7 +88,21 @@ export interface XPTransaction {
   'amount' : XPAmount,
   'reason' : XPReason,
 }
+export interface LeaderboardRow {
+  rank: bigint;
+  userId: UserId;
+  xp: bigint;
+  level: bigint;
+  totalDistance: bigint;
+}
+export interface LeaderboardPage {
+  total: bigint;
+  rows: LeaderboardRow[];
+  callerRow: [] | [LeaderboardRow];
+}
 export interface _SERVICE {
+  'getLeaderboardPage' : ActorMethod<[bigint, bigint, TimeFilter, { XP: null } | { Distance: null } | { Level: null }], LeaderboardPage>,
+  'getXPInRange' : ActorMethod<[UserId, Timestamp, Timestamp], { total: bigint; transactions: XPTransaction[] }>,
   'addAchievementXP' : ActorMethod<[UserId, string], Result_3>,
   'addAdminPrincipal' : ActorMethod<[Principal], Result_1>,
   'addDistanceXP' : ActorMethod<[UserId, Distance], Result_3>,

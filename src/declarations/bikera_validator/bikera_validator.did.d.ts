@@ -114,7 +114,10 @@ export interface ValidationViolation {
   'severity' : string,
   'violationType' : string,
 }
+export type RouteActivity = { Walk: null } | { Run: null } | { Bike: null };
+export interface RoutePage { total: bigint; validCount: bigint; totalDistance: bigint; rows: RouteSummary[] }
 export interface _SERVICE {
+  'getUserRoutePage' : ActorMethod<[UserId, [] | [Timestamp], [] | [RouteActivity], bigint, bigint], RoutePage>,
   'clearOldData' : ActorMethod<[], Result_1>,
   'clearUserData' : ActorMethod<[UserId], Result_1>,
   'getAntiGamingRules' : ActorMethod<[], AntiGamingRule>,

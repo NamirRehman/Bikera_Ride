@@ -10,6 +10,7 @@ import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
+import { requireRiderIdentity } from '../services/integration-utils';
 import { getBikeraUserActor, getBikeraXpActor } from '../utils/actors';
 import { ThreeDotLoader } from '../components/ThreeDotLoader';
 import { ListSkeleton } from '../components/ListSkeleton';
@@ -197,9 +198,9 @@ export function FriendsScreen() {
         return;
       }
       setActionBusy((prev) => ({ ...prev, [requestId]: true }));
-      const identity = getIdentity();
+      const identity = requireRiderIdentity(getIdentity(), storedPrincipal);
       const userActor = getBikeraUserActor({}, identity);
-      const p = Principal.fromText(storedPrincipal);
+      const p = identity.getPrincipal();
       const response = await userActor.respondToFriendRequest(requestId, true, p);
       assertCanisterOk(response, 'Failed to accept friend request');
       setRequestItems(prev => prev.filter(r => r.id !== requestId));
@@ -222,9 +223,9 @@ export function FriendsScreen() {
         return;
       }
       setActionBusy((prev) => ({ ...prev, [requestId]: true }));
-      const identity = getIdentity();
+      const identity = requireRiderIdentity(getIdentity(), storedPrincipal);
       const userActor = getBikeraUserActor({}, identity);
-      const p = Principal.fromText(storedPrincipal);
+      const p = identity.getPrincipal();
       const response = await userActor.respondToFriendRequest(requestId, false, p);
       assertCanisterOk(response, 'Failed to reject friend request');
       setRequestItems(prev => prev.filter(r => r.id !== requestId));
@@ -254,9 +255,9 @@ export function FriendsScreen() {
         return;
       }
       setSending(true);
-      const identity = getIdentity();
+      const identity = requireRiderIdentity(getIdentity(), storedPrincipal);
       const userActor = getBikeraUserActor({}, identity);
-      const p = Principal.fromText(storedPrincipal);
+      const p = identity.getPrincipal();
       const to = Principal.fromText(val);
       const response = await userActor.sendFriendRequest(to, p);
       assertCanisterOk(response, 'Failed to send friend request');

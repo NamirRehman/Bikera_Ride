@@ -324,6 +324,7 @@ export interface UserReward {
 export type Visibility = { 'Private' : null } |
   { 'Public' : null };
 export interface _SERVICE {
+  'getRewardsInRange' : ActorMethod<[UserId, Timestamp, Timestamp], { total: bigint; count: bigint; rewards: UserReward[] }>,
   'addAdminPrincipal' : ActorMethod<[Principal], Result>,
   'adminCancelMovementStake' : ActorMethod<[MovementStakeId, string], Result_5>,
   'calculateGoalStakingRewards' : ActorMethod<

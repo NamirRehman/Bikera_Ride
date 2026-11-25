@@ -9,12 +9,13 @@ import { Screen } from '../components/Screen';
 import { Card } from '../components/Card';
 import { ThreeDotLoader } from '../components/ThreeDotLoader';
 import { useAuth } from '../contexts/AuthContext';
+import { requireRiderIdentity } from '../services/integration-utils';
 import { useTheme } from '../theme/ThemeContext';
 import { colors } from '../theme/tokens';
 import { getBikeraUserActor, getBikeraXpActor, getBikeraImeraActor } from '../utils/actors';
 import { useCachedData } from '../hooks/useCachedData';
 import { invalidateProfileCache } from '../utils/cacheHelpers';
-import { formatDistanceKmLabel, formatImera, formatXP, fromE8s, normalizeImera } from '../utils/formatStats';
+import { formatDistanceKmLabel, formatImeraTokens, formatXP, fromE8s, normalizeImera } from '../utils/formatStats';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { WalletScreen } from './WalletScreen';
 import { WEB_APP_URL } from '../config';
@@ -222,7 +223,7 @@ export function ProfileScreen() {
       }
 
       if (profileData.imeraBalance !== undefined && profileData.imeraBalance !== null) {
-        setTotalIMERA(normalizeImera(profileData.imeraBalance));
+        setTotalIMERA(fromE8s(profileData.imeraBalance));
       }
 
       setLoading(false);
@@ -243,11 +244,7 @@ export function ProfileScreen() {
 
     try {
       setIsUpdating(true);
-      const identity = getIdentity();
-      if (!identity) {
-        error('Authentication Error', 'Please authenticate first');
-        return;
-      }
+      const identity = requireRiderIdentity(getIdentity(), principal);
 
       const userActor = getBikeraUserActor({}, identity);
       const existingCountry =
@@ -274,7 +271,7 @@ export function ProfileScreen() {
             website: formWebsite ? [formWebsite] : [],
           },
         ],
-        Principal.fromText(principal)
+        identity.getPrincipal()
       );
 
       if (res && typeof res === 'object' && 'ok' in res) {
@@ -305,11 +302,7 @@ export function ProfileScreen() {
 
     try {
       setSavingPrefs(true);
-      const identity = getIdentity();
-      if (!identity) {
-        error('Authentication Error', 'Please authenticate first');
-        return;
-      }
+      const identity = requireRiderIdentity(getIdentity(), principal);
 
       const userActor = getBikeraUserActor({}, identity);
       const res: any = await userActor.updatePreferences(
@@ -329,7 +322,7 @@ export function ProfileScreen() {
           voiceGuidance: prefVoiceGuidance,
           dataSharing: prefDataSharing,
         },
-        Principal.fromText(principal)
+        identity.getPrincipal()
       );
 
       if (res && typeof res === 'object' && 'ok' in res) {
@@ -353,11 +346,7 @@ export function ProfileScreen() {
 
     try {
       setSavingPrivacy(true);
-      const identity = getIdentity();
-      if (!identity) {
-        error('Authentication Error', 'Please authenticate first');
-        return;
-      }
+      const identity = requireRiderIdentity(getIdentity(), principal);
 
       const userActor = getBikeraUserActor({}, identity);
       const res: any = await userActor.updatePrivacySettings(
@@ -369,7 +358,7 @@ export function ProfileScreen() {
           allowFriendRequests: privacyAllowFriendReq,
           showAchievements: privacyShowAchievements,
         },
-        Principal.fromText(principal)
+        identity.getPrincipal()
       );
 
       if (res && typeof res === 'object' && 'ok' in res) {
@@ -571,7 +560,7 @@ export function ProfileScreen() {
               </LinearGradient>
               <LinearGradient colors={[colors.brandBlue300, colors.brandBlue100]} style={styles.statCard}>
                 <Text style={styles.statLabel}>iMERA</Text>
-                <Text style={styles.statValue}>{formatImera(totalIMERA)}</Text>
+                <Text style={styles.statValue}>{formatImeraTokens(totalIMERA)}</Text>
               </LinearGradient>
               <View style={[styles.statCard, { backgroundColor: colors.surfaceCard, borderWidth: 1, borderColor: colors.borderAccent }]}>
                 <Text style={styles.statLabel}>Distance</Text>
@@ -843,7 +832,6 @@ export function ProfileScreen() {
                       await saveUserCountry(opt.code, {
                         identity: getIdentity(),
                         principalText: principal || undefined,
-                        currentBio: formBio,
                       });
                       setProfileCountry(opt.code);
                       setShowCountryPicker(false);

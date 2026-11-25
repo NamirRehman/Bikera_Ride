@@ -26,6 +26,8 @@ import { useCachedData } from '../hooks/useCachedData';
 import { ListSkeleton } from '../components/ListSkeleton';
 import { useToastHelpers } from '../contexts/ToastContext';
 import { fetchPublicCards } from '../services/userSummary';
+import { requireRiderIdentity, withTimeout } from '../services/integration-utils';
+import type { TimeFilter as BackendTimeFilter } from '../declarations/bikera_xp/bikera_xp.did';
 import { formatDistanceKmLabel, formatXP } from '../utils/formatStats';
 import {
   COUNTRY_OPTIONS,
@@ -49,6 +51,9 @@ interface LeaderboardEntry {
 }
 
 type TimeFilter = 'daily' | 'weekly' | 'monthly' | 'allTime';
+const TIME_FILTER: Record<TimeFilter, BackendTimeFilter> = {
+  daily: { Daily: null }, weekly: { Weekly: null }, monthly: { Monthly: null }, allTime: { AllTime: null },
+};
 const LEADERBOARD_PAGE_SIZE = 10;
 const GLOBAL_LIMIT = 40;
 const BOARD_FETCH_TIMEOUT_MS = 18_000;
@@ -128,6 +133,12 @@ export function LeaderboardScreen() {
   const [visibleCount, setVisibleCount] = useState(LEADERBOARD_PAGE_SIZE);
   const [refreshing, setRefreshing] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const [extraGlobal, setExtraGlobal] = useState<{ scope: string; entries: LeaderboardEntry[]; offset: number } | null>(null);
+  const [loadingGlobalPage, setLoadingGlobalPage] = useState(false);
+  const globalPageInFlight = useRef(false);
+  const globalGeneration = useRef(0);
+  const isGlobal = !friendsOnly && !countryOnly;
+  const cacheKey = ['xp-board', principal || 'guest', timeFilter, friendsOnly ? 'friends' : 'all', countryOnly ? myCountry : 'world'].join(':');
   const requestGen = useRef(0);
   const publishPreview = useRef<(rows: LeaderboardEntry[]) => void>(() => {});
   publishPreview.current = (rows) => {
@@ -154,20 +165,52 @@ export function LeaderboardScreen() {
     }, [])
   );
 
+  const loadGlobalPage = useCallback(async (offset: number) => {
+    const identity = principal ? requireRiderIdentity(getIdentity(), principal) : undefined;
+    const actor = getBikeraXpActor({}, identity);
+    const page = await withTimeout(
+      actor.getLeaderboardPage(BigInt(offset), BigInt(LEADERBOARD_PAGE_SIZE), TIME_FILTER[timeFilter], { XP: null }),
+      BOARD_FETCH_TIMEOUT_MS,
+      'The leaderboard could not be loaded. Try again.'
+    );
+    const [summaries, friends] = await Promise.all([
+      fetchPublicCards(page.rows.map((row) => row.userId)).catch(() => []),
+      principal ? getBikeraUserActor().getFriends(Principal.fromText(principal)).catch(() => []) : Promise.resolve([]),
+    ]);
+    const profiles = new Map(summaries.map((profile) => [profile.userId, profile]));
+    const friendIds = new Set(friends.map((friend) => friend.toText()));
+    const entries: LeaderboardEntry[] = page.rows.map((row) => {
+      const userId = row.userId.toText();
+      const profile = profiles.get(userId);
+      return {
+        rank: Number(row.rank),
+        userId,
+        username: profile?.username || `User${userId.slice(0, 8)}`,
+        xp: Number(row.xp),
+        level: Number(row.level),
+        distance: Number(row.totalDistance) / 1_000,
+        avatar: profile?.avatar,
+        country: profile?.country,
+        isCurrentUser: userId === principal,
+        isFriend: friendIds.has(userId),
+      };
+    });
+    return {
+      entries,
+      userRank: page.callerRow[0] ? Number(page.callerRow[0].rank) : null,
+      totalUsers: Number(page.total),
+    };
+  }, [getIdentity, principal, timeFilter]);
+
   const fetchLeaderboardData = useCallback(async () => {
     try {
+      if (isGlobal) return { ...await loadGlobalPage(0), scope: cacheKey };
       const xpActor = getBikeraXpActor();
       const userActor = getBikeraUserActor();
       const currentPrincipalText = principal || (await AsyncStorage.getItem('bikera_principal')) || '';
       const storedCountry = (await getStoredCountry()) || myCountry;
 
-      const timeFilterMap: Record<TimeFilter, { AllTime: null } | { Daily: null } | { Weekly: null } | { Monthly: null }> = {
-        allTime: { AllTime: null },
-        daily: { Daily: null },
-        weekly: { Weekly: null },
-        monthly: { Monthly: null },
-      };
-      const backendTimeFilter = timeFilterMap[timeFilter] || timeFilterMap.allTime;
+      const backendTimeFilter = TIME_FILTER[timeFilter];
 
       const withHardTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
         Promise.race([
@@ -229,13 +272,13 @@ export function LeaderboardScreen() {
       if (friendsOnly) {
         friendSet = await friendsPromise;
         if (!currentPrincipalText) {
-          return { entries: [], userRank: null, totalUsers: 0, hasMore: false };
+          return { scope: cacheKey, entries: [], userRank: null, totalUsers: 0, hasMore: false };
         }
         if (friendsFetchFailed) {
           throw new Error('Could not load friends list. Pull to refresh.');
         }
         if (friendSet.size === 0) {
-          return { entries: [], userRank: null, totalUsers: 0, hasMore: false };
+          return { scope: cacheKey, entries: [], userRank: null, totalUsers: 0, hasMore: false };
         }
         rows = Array.from(friendSet)
           .slice(0, GLOBAL_LIMIT)
@@ -257,7 +300,7 @@ export function LeaderboardScreen() {
       }
 
       if (rows.length === 0) {
-        return { entries: [], userRank: null, totalUsers: 0, hasMore: false };
+        return { scope: cacheKey, entries: [], userRank: null, totalUsers: 0, hasMore: false };
       }
 
       if (!countryOnly) {
@@ -297,7 +340,7 @@ export function LeaderboardScreen() {
       let filtered = profiles as BoardProfile[];
       if (countryOnly) {
         if (!storedCountry) {
-          return { entries: [], userRank: null, totalUsers: 0, hasMore: false, needsCountry: true as const };
+          return { scope: cacheKey, entries: [], userRank: null, totalUsers: 0, hasMore: false, needsCountry: true as const };
         }
         filtered = profiles.filter(
           (p) => p.isCurrentUser || (p.country && p.country.toUpperCase() === storedCountry.toUpperCase())
@@ -317,6 +360,7 @@ export function LeaderboardScreen() {
       const currentUserEntry = rankedEntries.find((e) => e.isCurrentUser);
 
       return {
+        scope: cacheKey,
         entries: rankedEntries,
         userRank: currentUserEntry?.rank ?? null,
         totalUsers: rankedEntries.length,
@@ -327,12 +371,7 @@ export function LeaderboardScreen() {
       console.error('Failed to fetch leaderboard:', e);
       throw e instanceof Error ? e : new Error(String(e));
     }
-  }, [timeFilter, friendsOnly, countryOnly, principal, myCountry]);
-
-  const cacheKey = useMemo(
-    () => `xp:${timeFilter}:f${friendsOnly ? 1 : 0}:c${countryOnly ? 1 : 0}:${myCountry || 'none'}`,
-    [timeFilter, friendsOnly, countryOnly, myCountry]
-  );
+  }, [isGlobal, loadGlobalPage, cacheKey, timeFilter, friendsOnly, countryOnly, principal, myCountry]);
 
   const { data: leaderboardData, loading: leaderboardLoading, refetch, error: leaderboardError } = useCachedData({
     type: 'leaderboard',
@@ -348,16 +387,28 @@ export function LeaderboardScreen() {
   useEffect(() => {
     setVisibleCount(LEADERBOARD_PAGE_SIZE);
     setPreviewEntries([]);
-  }, [timeFilter, friendsOnly, countryOnly, myCountry]);
+    setExtraGlobal(null);
+    return () => {
+      globalGeneration.current += 1;
+      requestGen.current += 1;
+    };
+  }, [cacheKey]);
 
-  const sourceEntries = leaderboardData?.entries ?? previewEntries;
+  const currentBoard = leaderboardData?.scope === cacheKey ? leaderboardData : null;
+  const nextOffset = extraGlobal?.scope === cacheKey ? extraGlobal.offset : currentBoard?.entries.length ?? 0;
+  const sourceEntries = useMemo(() => {
+    const first = currentBoard?.entries ?? previewEntries;
+    if (!isGlobal || extraGlobal?.scope !== cacheKey) return first;
+    const seen = new Set(first.map((entry) => entry.userId));
+    return [...first, ...extraGlobal.entries.filter((entry) => !seen.has(entry.userId))];
+  }, [currentBoard, previewEntries, isGlobal, extraGlobal, cacheKey]);
   const visibleEntries = useMemo(
     () => sourceEntries.slice(0, visibleCount),
     [sourceEntries, visibleCount]
   );
-  const userRank = leaderboardData?.userRank ?? null;
-  const totalUsers = leaderboardData?.totalUsers ?? sourceEntries.length;
-  const hasMore = visibleCount < sourceEntries.length;
+  const userRank = currentBoard?.userRank ?? null;
+  const totalUsers = currentBoard?.totalUsers ?? sourceEntries.length;
+  const hasMore = visibleCount < sourceEntries.length || (isGlobal && nextOffset > 0 && nextOffset < totalUsers);
 
   const handleToggleFriends = useCallback(() => {
     if (!principal && !friendsOnly) {
@@ -409,11 +460,11 @@ export function LeaderboardScreen() {
     if (userId === principal) return;
     try {
       setSendingTo(userId);
-      const identity = getIdentity();
+      const identity = requireRiderIdentity(getIdentity(), principal);
       const userActor = getBikeraUserActor({}, identity);
       const response = await userActor.sendFriendRequest(
         Principal.fromText(userId),
-        Principal.fromText(principal)
+        identity.getPrincipal()
       );
       assertCanisterOk(response, 'Failed to send friend request');
       success('Request sent', `Friend request sent to ${username}`);
@@ -467,15 +518,46 @@ export function LeaderboardScreen() {
 
   const isInitialLoading = leaderboardLoading && visibleEntries.length === 0 && !leaderboardError;
 
-  const handleLoadMore = useCallback(() => {
-    if (!hasMore) return;
-    setVisibleCount((prev) => prev + LEADERBOARD_PAGE_SIZE);
-  }, [hasMore]);
+  const handleLoadMore = useCallback(async () => {
+    if (!hasMore || globalPageInFlight.current) return;
+    if (!isGlobal || visibleCount < sourceEntries.length) {
+      setVisibleCount((prev) => prev + LEADERBOARD_PAGE_SIZE);
+      return;
+    }
+    const generation = globalGeneration.current;
+    globalPageInFlight.current = true;
+    setLoadingGlobalPage(true);
+    try {
+      const page = await loadGlobalPage(nextOffset);
+      if (generation !== globalGeneration.current) return;
+      setExtraGlobal((previous) => {
+        const entries = previous?.scope === cacheKey ? previous.entries : [];
+        const seen = new Set(entries.map((entry) => entry.userId));
+        return {
+          scope: cacheKey,
+          entries: [...entries, ...page.entries.filter((entry) => !seen.has(entry.userId))],
+          offset: page.entries.length ? nextOffset + page.entries.length : totalUsers,
+        };
+      });
+      setVisibleCount((prev) => prev + LEADERBOARD_PAGE_SIZE);
+    } catch (err) {
+      if (generation === globalGeneration.current) error('Leaderboard', err instanceof Error ? err.message : 'Could not load more riders.');
+    } finally {
+      globalPageInFlight.current = false;
+      setLoadingGlobalPage(false);
+    }
+  }, [hasMore, isGlobal, visibleCount, sourceEntries.length, loadGlobalPage, nextOffset, cacheKey, totalUsers, error]);
 
   const onRefresh = useCallback(async () => {
+    globalGeneration.current += 1;
+    setExtraGlobal(null);
+    setVisibleCount(LEADERBOARD_PAGE_SIZE);
     setRefreshing(true);
-    await refetch();
-    setRefreshing(false);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
   }, [refetch]);
 
   const renderEntryItem = useCallback(({ item }: { item: LeaderboardEntry }) => (
@@ -621,8 +703,9 @@ export function LeaderboardScreen() {
           <Pressable
             style={({ pressed }) => [styles.loadMoreButton, pressed && { opacity: 0.9 }]}
             onPress={handleLoadMore}
+            disabled={loadingGlobalPage}
           >
-            <Text style={styles.loadMoreText}>Load more</Text>
+            <Text style={styles.loadMoreText}>{loadingGlobalPage ? 'Loading more…' : 'Load more'}</Text>
           </Pressable>
         ) : (
           <View style={styles.footerSpacer} />
@@ -651,7 +734,7 @@ export function LeaderboardScreen() {
         ) : null}
       </View>
     ),
-    [hasMore, handleLoadMore, principal, userRank, totalUsers]
+    [hasMore, handleLoadMore, loadingGlobalPage, principal, userRank, totalUsers]
   );
 
   const emptySubtitle = friendsOnly

@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors } from '../theme/tokens';
 import { getRideEvidenceOverview, rideEvidence, sessionRoutePoints, type RideEvidenceOverview } from '../services/rideEvidence';
 import { shareGpx } from '../services/rideFiles';
+import { rideDurationSeconds } from '../utils/formatStats';
 
 const km = (metres: bigint) => (Number(metres) / 1000).toFixed(1);
 
@@ -51,7 +52,7 @@ export function VerifiedRidesPanel({ refreshKey = 0 }: { refreshKey?: number }) 
           return <View key={ride.id} style={styles.ride}>
             <View style={{ flex: 1 }}>
               <Text style={styles.date}>{new Date(Number(ride.startTime / 1_000_000n)).toLocaleDateString()} · {km(ride.distance)} km</Text>
-              <Text style={styles.caption}>{Math.round(Number(ride.duration) / 60)} min · {ride.avgSpeed.toString()} km/h average</Text>
+              <Text style={styles.caption}>{Math.round(rideDurationSeconds(ride.duration) / 60)} min · {ride.avgSpeed.toString()} km/h average</Text>
               {ride.route.length >= 2 ? <Pressable accessibilityRole="button" disabled={exporting !== null} onPress={async () => {
                 setExporting(ride.id);
                 try { await shareGpx({ title: `Bikera ride ${ride.id}`, points: sessionRoutePoints(ride) }); }

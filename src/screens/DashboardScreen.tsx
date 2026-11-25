@@ -25,7 +25,7 @@ import {
 import { useCachedData } from '../hooks/useCachedData';
 import { startupGate } from '../services/startupGate';
 import { fetchTodayDistanceKm } from '../services/todayDistance';
-import { formatDistanceKm, formatImera, formatXP, fromE8s, E8S_PER_TOKEN } from '../utils/formatStats';
+import { formatDistanceKm, formatImeraTokens, formatXP, fromE8s } from '../utils/formatStats';
 
 interface DashboardTransaction {
   id: string;
@@ -122,7 +122,7 @@ export function DashboardScreen() {
   );
 
   const formattedXP = useMemo(() => formatXP(stats.xp ?? 0), [stats.xp]);
-  const formattedImera = useMemo(() => formatImera(stats.imera ?? 0), [stats.imera]);
+  const formattedImera = useMemo(() => formatImeraTokens(stats.imera ?? 0), [stats.imera]);
 
   // Profile, stats and latest transactions
   const fetchDashboardData = useCallback(async () => {
@@ -152,7 +152,7 @@ export function DashboardScreen() {
           if (__DEV__) console.warn('[DASHBOARD] Today distance summary failed:', error);
           return null;
         }),
-        (rewardsActor as any).getRewardsSnapshot?.(p).catch(() => null),
+        rewardsActor.getRewardsSnapshot(p).catch(() => null),
       ]);
       const profile = profileRaw ? unwrapSnapshot(profileRaw) : null;
 
@@ -160,12 +160,10 @@ export function DashboardScreen() {
         ? rewardsSnapshot.recentRewards
         : [];
       const transactions: DashboardTransaction[] = recentRewards
-        .map((reward: any, index: number) => {
-          const raw = Number(reward.amount || 0);
-          const amount = raw >= E8S_PER_TOKEN / 1000 ? fromE8s(raw) : raw;
+        .map((reward, index: number) => {
           return {
             id: `reward-${index}-${reward.roundId ?? index}`,
-            amount,
+            amount: fromE8s(reward.amount),
             timestamp: Number(reward.timestamp || 0) / 1_000_000 || Date.now(),
           };
         })
@@ -191,13 +189,13 @@ export function DashboardScreen() {
   }, [principal, getIdentity]);
 
   const { data: dashboardData, loading: dashboardLoading, refetch } = useCachedData({
-    type: 'dashboard_v2',
-    identifier: principal || undefined,
+    type: 'dashboard',
+    identifier: principal ? `${principal}:ledger` : undefined,
     fetcher: fetchDashboardData,
     enabled: !!principal,
     tier: 'bootstrap',
-    refetchOnFocus: false,
-    refetchOnForeground: false,
+    refetchOnFocus: true,
+    refetchOnForeground: true,
     minRefetchIntervalMs: 90_000,
   });
 
@@ -392,7 +390,7 @@ export function DashboardScreen() {
                     </Text>
                   </View>
                   <Text style={styles.actionAmount}>
-                    +{formatImera(tx.amount)} iMERA
+                    +{formatImeraTokens(tx.amount)} iMERA
                   </Text>
                 </View>
               ))}
