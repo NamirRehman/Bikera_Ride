@@ -38,7 +38,11 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bikera.app",
-      "buildNumber": "4",
+      "buildNumber": "5",
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": []
+      },
       "icon": "./assets/icon.png",
       "splash": {
         "image": "./assets/icon.png",
@@ -197,7 +201,8 @@
           "color": "#42C0FB"
         }
       ],
-      "./plugins/withPlayAndroidFixes.js"
+      "./plugins/withPlayAndroidFixes.js",
+      "./plugins/withIosRidePrivacy.js"
     ],
     "extra": {
       "eas": {

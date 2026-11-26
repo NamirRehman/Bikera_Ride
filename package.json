@@ -10,11 +10,13 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test:ride-integrations": "node --test tests/ride-integrations.test.cjs",
+    "check:ios-privacy": "node scripts/check-ios-privacy.cjs",
     "prebuild": "expo prebuild",
     "build:development": "eas build --profile development --platform android",
     "build:preview": "eas build --profile preview --platform android",
     "build:apk": "eas build --profile preview-apk --platform android",
     "build:production": "eas build --profile production --platform android",
+    "build:ios": "npm run check:ios-privacy && eas build --profile production --platform ios",
     "build:production-apk": "eas build --profile production-apk --platform android",
     "submit:ios": "eas submit --platform ios",
     "submit:android": "eas submit --platform android"

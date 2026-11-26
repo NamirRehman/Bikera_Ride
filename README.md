@@ -13,6 +13,32 @@ A React Native mobile app for Bikera - track bike rides, earn rewards, compete w
 - 📊 **Analytics**: Detailed ride history and statistics
 - 🌙 **Dark Mode**: Automatic theme switching
 
+## iOS privacy build check
+
+Ride uses location for cycling features and validation. Its app privacy manifest
+declares `NSPrivacyTracking: false` and no tracking domains. The final iOS config
+plugin removes obsolete `NSUserTrackingUsageDescription` and markdown ATT purpose
+strings during prebuild. Location permission descriptions remain in place.
+
+Run `npm run check:ios-privacy` to verify the generated iOS Info.plist without
+creating native project files. `node scripts/check-ios-privacy.cjs --with-legacy-entry`
+also verifies that the configured plugin chain removes stale tracking entries.
+Use `npm run build:ios` for a checked production build; the existing EAS production
+profile increments its build number automatically.
+
+An uploaded App Store binary cannot be changed by this source update or an OTA
+update. Upload and select a new native iOS build, and verify its final app Info.plist
+before resubmission. These checks validate prebuild output, not a downloaded IPA.
+
+In App Store Connect, set Coarse Location and Precise Location to **App Functionality**,
+**Linked to the user** where account-associated ride data is retained, and **not used
+for tracking**, provided backend and service-provider practices also match. Publish
+those privacy answers separately; app configuration cannot edit the listing.
+
+This privacy change does not provide the full demo access Apple separately requested.
+If advertising tracking is added later, implement consent and update both the native
+privacy configuration and store declarations before shipping it.
+
 ## Getting Started
 
 ### Prerequisites
